@@ -1,0 +1,24 @@
+{
+  "serverName": "My Game Server",
+  "serverPort": 9050,
+  "serverConnectionKey": "SecretKey",
+  "serverMaxPlayers": 10,
+  "serverGameMode": 0,
+  "serverAllowCheats": false,
+  "serverAdminList": ["player_id1", "player_id2"],
+  "serverBanList": ["player_id1_banned", "player_id2_banned"],
+
+  "networkTickRate": 20,
+  "networkDisconnectTimeout": 10000,
+  "networkEnableHeartbeat": true,
+  "networkHeartbeatInterval": 5000,
+
+  "loggingEnableConsole": true,
+  "loggingEnableTick": false,
+  "loggingPlayerEvents": true,
+  "loggingNetworkEvents": true,
+  "loggingEnableFile": false,
+  "loggingFilePath": "server.log",
+  "loggingEnableErrors": true,
+  "loggingEnablePerformance": false
+}
