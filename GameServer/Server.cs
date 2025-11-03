@@ -1,173 +1,221 @@
-using System;
-using System.Threading;
 using LiteNetLib;
 using LiteNetLib.Utils;
 
 namespace GameServer;
 
-public class Server
-{
-    public ServerConfig Config { get; }
+public class Server {
+  public ServerConfig Config { get; }
+  public event Action<string, NetPeer?, string>? ServerEvent;
 
-    private Thread? _thread;
-    private bool _running;
-    private NetManager? _netManager;
-    private EventBasedNetListener? _listener;
+  private bool _running;
+  private readonly Lock _runningLock = new();
+  private readonly Thread _thread;
+  private readonly NetManager _netManager;
+  private readonly EventBasedNetListener _listener;
+  private readonly NetDataWriter _writer = new();
 
-    public Server(ServerConfig? config = null)
-    {
-        var loadedConfig = config ?? ServerConfig.LoadFromFile();
-        if (loadedConfig == null)
-        {
-            Console.WriteLine("Failed to load config file. Please ensure server_config.json exists with valid settings.");
-            Environment.Exit(1);
+  public Server(ServerConfig config) {
+    Config = config;
+
+    _listener = new EventBasedNetListener();
+    _netManager = new NetManager(_listener) { DisconnectTimeout = Config.NetworkDisconnectTimeout };
+    _thread = new Thread(ServerLoop) { IsBackground = true };
+  }
+
+  public void Start() {
+    lock (_runningLock) {
+      if (_running) { return; }
+      _running = true;
+    }
+
+    _netManager.Start(Config.ServerPort);
+
+    _listener.ConnectionRequestEvent += OnConnectionRequest;
+    _listener.PeerConnectedEvent += OnPlayerJoined;
+    _listener.PeerDisconnectedEvent += OnPlayerLeft;
+    _listener.NetworkReceiveEvent += OnMessageReceived;
+
+    _thread.Start();
+
+    Console.WriteLine($"{Config.ServerName} started on port {Config.ServerPort}");
+  }
+
+  public void Stop() {
+    bool shouldNotify;
+    lock (_runningLock) {
+      if (!_running) { return; }
+      _running = false;
+      shouldNotify = _netManager.ConnectedPeersCount > 0;
+    }
+    if (shouldNotify) {
+      BroadcastMessage("Server is shutting down");
+      ServerEvent?.Invoke("ServerShutdown", null, "Server is shutting down");
+      Thread.Sleep(100);
+    }
+
+    _netManager.Stop();
+    Console.WriteLine("Server stopped.");
+  }
+
+  public void BanPlayer(NetPeer peer, string reason = "You have been banned") {
+    bool canProceed;
+    lock (_runningLock) {
+      canProceed = _running;
+    }
+
+    if (!canProceed) { return; }
+
+    SendMessage(peer, reason);
+    Thread.Sleep(50);
+    peer.Disconnect();
+    ServerEvent?.Invoke("PlayerBanned", peer, reason);
+  }
+
+  private void OnConnectionRequest(ConnectionRequest request) {
+    bool isRunning;
+    lock (_runningLock) {
+      isRunning = _running;
+    }
+
+    if (!isRunning) { return; }
+
+    if (_netManager.ConnectedPeersCount >= Config.ServerMaxPlayers) {
+      request.Reject();
+      Log($"Connection rejected: Server full ({Config.ServerMaxPlayers} players)");
+      ServerEvent?.Invoke("ConnectionRejected", null, "Server is full");
+    } else if (!request.Data.GetString().Equals(Config.ServerConnectionKey)) {
+      request.Reject();
+      Log("Connection rejected: Invalid key");
+      ServerEvent?.Invoke("ConnectionRejected", null, "Invalid connection key");
+    } else {
+      request.Accept();
+    }
+  }
+
+  private void OnPlayerJoined(NetPeer peer) {
+    bool isRunning;
+    lock (_runningLock) {
+      isRunning = _running;
+    }
+
+    if (!isRunning) { return; }
+
+    if (Config.LoggingPlayerEvents) {
+      Console.WriteLine($"Player joined: {peer.Address}:{peer.Port} " +
+                      $"({_netManager.ConnectedPeersCount}/{Config.ServerMaxPlayers})");
+    }
+
+    ServerEvent?.Invoke("PlayerJoined", peer, $"Player joined from {peer.Address}:{peer.Port}");
+  }
+
+  private void OnPlayerLeft(NetPeer peer, DisconnectInfo info) {
+    bool isRunning;
+    lock (_runningLock) {
+      isRunning = _running;
+    }
+
+    if (!isRunning) { return; }
+
+    string reason = info.Reason switch {
+      DisconnectReason.Timeout => "Connection timeout",
+      DisconnectReason.RemoteConnectionClose => "Client disconnected",
+      DisconnectReason.DisconnectPeerCalled => "Disconnected by server",
+      DisconnectReason.ConnectionFailed => "Connection failed",
+      DisconnectReason.NetworkUnreachable => "Network error",
+      _ => info.Reason.ToString()
+    };
+
+    if (Config.LoggingPlayerEvents) {
+      Console.WriteLine($"Player left: {peer.Address}:{peer.Port} - {reason} " +
+                      $"({_netManager.ConnectedPeersCount}/{Config.ServerMaxPlayers})");
+    }
+
+    ServerEvent?.Invoke("PlayerLeft", peer, reason);
+  }
+
+  private void OnMessageReceived(NetPeer peer, NetPacketReader reader, byte channel, DeliveryMethod method) {
+    try {
+      string msg = reader.GetString();
+      Log($"Received: {msg}");
+      BroadcastMessage(msg, peer);
+    } catch (Exception ex) {
+      Log($"Error processing message: {ex.Message}");
+    } finally {
+      reader.Recycle();
+    }
+  }
+
+  private void ServerLoop() {
+    if (Config.NetworkTickRate <= 0) {
+      Console.WriteLine($"Invalid NetworkTickRate: {Config.NetworkTickRate}");
+      return;
+    }
+
+    TimeSpan tickInterval = TimeSpan.FromMilliseconds(1000.0 / Config.NetworkTickRate);
+    DateTime lastTick = DateTime.UtcNow;
+
+    while (true) {
+      bool shouldRun;
+      lock (_runningLock) {
+        shouldRun = _running;
+      }
+
+      if (!shouldRun) { break; }
+      _netManager.PollEvents();
+
+      DateTime now = DateTime.UtcNow;
+      if (now - lastTick >= tickInterval) {
+        if (Config.LoggingEnableTick) {
+          Console.WriteLine($"Server tick at {DateTime.Now:HH:mm:ss}");
         }
-        Config = loadedConfig;
-    }
 
-    public void Start()
-    {
-        SetupNetworking();
-        SetupEventHandlers();
-        StartServerLoop();
-
-        Console.WriteLine($"{Config.ServerName} started on port {Config.ServerPort}");
-    }
-
-    public void Stop()
-    {
-        _running = false;
-        _netManager?.Stop();
-        Console.WriteLine("Server stopped.");
-    }
-
-    private void SetupNetworking()
-    {
-        _listener = new EventBasedNetListener();
-        _netManager = new NetManager(_listener)
-        {
-            DisconnectTimeout = Config.NetworkDisconnectTimeout
-        };
-        _netManager.Start(Config.ServerPort);
-    }
-
-    private void SetupEventHandlers()
-    {
-        _listener!.ConnectionRequestEvent += OnConnectionRequest;
-        _listener.PeerConnectedEvent += OnPlayerJoined;
-        _listener.PeerDisconnectedEvent += OnPlayerLeft;
-        _listener.NetworkReceiveEvent += OnMessageReceived;
-    }
-
-    private void StartServerLoop()
-    {
-        _running = true;
-        _thread = new Thread(ServerLoop) { IsBackground = true };
-        _thread.Start();
-    }
-
-    private void OnConnectionRequest(ConnectionRequest request)
-    {
-        if (_netManager!.ConnectedPeersCount < Config.ServerMaxPlayers)
-        {
-            request.AcceptIfKey(Config.ServerConnectionKey);
-        }
-        else
-        {
-            request.Reject();
-            if (Config.LoggingEnableConsole)
-                Console.WriteLine("Connection rejected: Server full");
-        }
-    }
-
-    private void OnPlayerJoined(NetPeer peer)
-    {
-        if (Config.LoggingPlayerEvents)
-            Console.WriteLine($"Player joined: {peer.Address}:{peer.Port} ({_netManager!.ConnectedPeersCount}/{Config.ServerMaxPlayers})");
-    }
-
-    private void OnPlayerLeft(NetPeer peer, DisconnectInfo disconnectInfo)
-    {
-        if (Config.LoggingPlayerEvents)
-            Console.WriteLine($"Player left: {peer.Address}:{peer.Port} ({_netManager!.ConnectedPeersCount}/{Config.ServerMaxPlayers})");
-    }
-
-    private void OnMessageReceived(NetPeer peer, NetPacketReader reader, byte channel, DeliveryMethod method)
-    {
-        try
-        {
-            var message = reader.GetString();
-
-            if (Config.LoggingEnableConsole)
-                Console.WriteLine($"Received: {message}");
-
-            BroadcastMessage(message, excludePeer: peer);
-        }
-        catch (Exception ex)
-        {
-            if (Config.LoggingEnableConsole)
-                Console.WriteLine($"Error processing message: {ex.Message}");
-        }
-        finally
-        {
-            reader.Recycle();
-        }
-    }
-
-    private void BroadcastMessage(string message, NetPeer? excludePeer = null)
-    {
-        var writer = new NetDataWriter();
-        writer.Put(message);
-
-        foreach (var peer in _netManager!.ConnectedPeerList)
-        {
-            if (peer != excludePeer)
-                peer.Send(writer, DeliveryMethod.ReliableOrdered);
-        }
-    }
-
-    private void ServerLoop()
-    {
-        if (Config.NetworkTickRate <= 0)
-        {
-            Console.WriteLine($"Invalid NetworkTickRate: {Config.NetworkTickRate}. Must be greater than 0.");
-            return;
+        if (Config.NetworkEnableHeartbeat) {
+          SendHeartbeat();
         }
 
-        var tickInterval = TimeSpan.FromMilliseconds(1000.0 / Config.NetworkTickRate);
-        var lastTick = DateTime.UtcNow;
+        lastTick = now;
+      }
 
-        while (_running)
-        {
-            _netManager!.PollEvents();
+      Thread.Sleep(1);
+    }
+  }
 
-            var now = DateTime.UtcNow;
-            if (now - lastTick >= tickInterval)
-            {
-                Tick();
-                lastTick = now;
-            }
+  private void SendHeartbeat() {
+    lock (_writer) {
+      _writer.Reset();
+      _writer.Put("heartbeat");
+      _writer.Put(DateTime.Now.ToString("HH:mm:ss"));
 
-            Thread.Sleep(1);
+      foreach (NetPeer peer in _netManager.ConnectedPeerList) {
+        peer.Send(_writer, DeliveryMethod.Unreliable);
+      }
+    }
+  }
+
+  private void BroadcastMessage(string msg, NetPeer? exclude = null) {
+    lock (_writer) {
+      _writer.Reset();
+      _writer.Put(msg);
+
+      foreach (NetPeer peer in _netManager.ConnectedPeerList) {
+        if (peer != exclude) {
+          peer.Send(_writer, DeliveryMethod.ReliableOrdered);
         }
+      }
     }
+  }
 
-    private void Tick()
-    {
-        if (Config.LoggingEnableTick)
-            Console.WriteLine($"Server tick at {DateTime.Now:HH:mm:ss}");
-
-        if (Config.NetworkEnableHeartbeat)
-            SendHeartbeat();
+  private void SendMessage(NetPeer peer, string msg) {
+    lock (_writer) {
+      _writer.Reset();
+      _writer.Put(msg);
+      peer.Send(_writer, DeliveryMethod.ReliableOrdered);
     }
+  }
 
-    private void SendHeartbeat()
-    {
-        var writer = new NetDataWriter();
-        writer.Put("heartbeat");
-        writer.Put(DateTime.Now.ToString("HH:mm:ss"));
-
-        foreach (var peer in _netManager!.ConnectedPeerList)
-            peer.Send(writer, DeliveryMethod.Unreliable);
+  private void Log(string message) {
+    if (Config.LoggingEnableConsole) {
+      Console.WriteLine(message);
     }
+  }
 }

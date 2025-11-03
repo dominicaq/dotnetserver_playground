@@ -1,82 +1,71 @@
-using System;
-using System.IO;
 using System.Text.Json;
 
 namespace GameServer;
 
-public class ServerConfig
-{
-    private static readonly JsonSerializerOptions DeserializeOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        ReadCommentHandling = JsonCommentHandling.Skip
-    };
+public class ServerConfig {
+  private static readonly JsonSerializerOptions _deserializeOptions = new() {
+    PropertyNameCaseInsensitive = true,
+    ReadCommentHandling = JsonCommentHandling.Skip
+  };
 
-    private static readonly JsonSerializerOptions SerializeOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    };
+  private static readonly JsonSerializerOptions _serializeOptions = new() {
+    WriteIndented = true,
+    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+  };
 
-    // Server settings
-    public string? ServerName { get; set; }
-    public int ServerPort { get; set; }
-    public string? ServerConnectionKey { get; set; }
-    public int ServerMaxPlayers { get; set; }
-    public int ServerGameMode { get; set; }
-    public bool ServerAllowCheats { get; set; }
-    public string[]? ServerAdminList { get; set; }
-    public string[]? ServerBanList { get; set; }
+  // Server settings
+  public string ServerName { get; set; } = "Game Server";
+  public int ServerPort { get; set; } = 7777;
+  public string ServerConnectionKey { get; set; } = "default_key";
+  public int ServerMaxPlayers { get; set; } = 100;
+  public int ServerGameMode { get; set; } = 0;
+  public bool ServerAllowCheats { get; set; } = false;
 
-    // Network settings
-    public int NetworkTickRate { get; set; }
-    public int NetworkDisconnectTimeout { get; set; }
-    public bool NetworkEnableHeartbeat { get; set; }
-    public int NetworkHeartbeatInterval { get; set; }
+  // Network settings
+  public int NetworkTickRate { get; set; } = 60;
+  public int NetworkDisconnectTimeout { get; set; } = 5000;
+  public bool NetworkEnableHeartbeat { get; set; } = true;
+  public int NetworkHeartbeatInterval { get; set; } = 1000;
 
-    // Logging
-    public bool LoggingEnableConsole { get; set; }
-    public bool LoggingEnableTick { get; set; }
-    public bool LoggingPlayerEvents { get; set; }
-    public bool LoggingNetworkEvents { get; set; }
-    public bool LoggingEnableFile { get; set; }
-    public string? LoggingFilePath { get; set; }
-    public bool LoggingEnableErrors { get; set; }
-    public bool LoggingEnablePerformance { get; set; }
+  // Logging
+  public bool LoggingEnableConsole { get; set; } = true;
+  public bool LoggingEnableTick { get; set; } = false;
+  public bool LoggingPlayerEvents { get; set; } = true;
+  public bool LoggingNetworkEvents { get; set; } = false;
+  public bool LoggingEnableFile { get; set; } = false;
+  public string LoggingFilePath { get; set; } = "server.log";
+  public bool LoggingEnableErrors { get; set; } = true;
+  public bool LoggingEnablePerformance { get; set; } = false;
 
-    public static ServerConfig? LoadFromFile(string configPath = "server_config.json")
-    {
-        try
-        {
-            if (!File.Exists(configPath))
-            {
-                Console.WriteLine($"Config file not found at {configPath}.");
-                return null;
-            }
+  public static ServerConfig LoadFromFile(string configPath = "server_config.json") {
+    try {
+      if (!File.Exists(configPath)) {
+        Console.WriteLine($"Config file not found at {configPath}. Creating default config...");
+        ServerConfig defaultConfig = new();
+        defaultConfig.SaveToFile(configPath);
+        return defaultConfig;
+      }
 
-            var jsonString = File.ReadAllText(configPath);
-            var config = JsonSerializer.Deserialize<ServerConfig>(jsonString, DeserializeOptions);
+      string jsonString = File.ReadAllText(configPath);
+      ServerConfig? config = JsonSerializer.Deserialize<ServerConfig>(jsonString, _deserializeOptions);
 
-            return config;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error loading config: {ex.Message}");
-            return null;
-        }
+      if (config == null) {
+        throw new InvalidOperationException("Failed to deserialize config file - result was null");
+      }
+
+      return config;
+    } catch (Exception ex) {
+      throw new InvalidOperationException($"Error loading config from {configPath}: {ex.Message}", ex);
     }
+  }
 
-    public void SaveToFile(string configPath = "server_config.json")
-    {
-        try
-        {
-            var jsonString = JsonSerializer.Serialize(this, SerializeOptions);
-            File.WriteAllText(configPath, jsonString);
-            Console.WriteLine($"Config saved to {configPath}");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error saving config: {ex.Message}");
-        }
+  public void SaveToFile(string configPath = "server_config.json") {
+    try {
+      string jsonString = JsonSerializer.Serialize(this, _serializeOptions);
+      File.WriteAllText(configPath, jsonString);
+      Console.WriteLine($"Config saved to {configPath}");
+    } catch (Exception ex) {
+      throw new InvalidOperationException($"Error saving config to {configPath}: {ex.Message}", ex);
     }
+  }
 }
