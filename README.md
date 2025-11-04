@@ -1,10 +1,18 @@
 # GameServer
+A .NET 9.0 game server/client abstraction built with LiteNetLib.
 
-A .NET 9.0 game server built with LiteNetLib.
-
-## Quick Start
+## Building GameNetworking .dll for general use
 ```bash
-dotnet run --project TestHost    # Build and run
+./export-dll.sh
 ```
 
-Press 'q' to quit, 's' for server info. Edit `server_config.json` to configure.
+## Test Bench Quickstart (automatically builds .dll)
+```bash
+cd TestBench
+# run server
+dotnet run
+# run client (separate terminal)
+dotnet run client
+```
+
+Edit `server_config.json` to configure.

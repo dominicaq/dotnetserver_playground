@@ -367,3 +367,6 @@ FodyWeavers.xsd
 *.user
 *.userosscache
 *.sln.docstates
+
+# dll ignore
+*.dll
