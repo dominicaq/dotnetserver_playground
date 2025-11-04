@@ -2,7 +2,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.5.2.0
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GameServer", "GameServer\GameServer.csproj", "{8CB1D2F4-457E-DC9A-2B1C-5000C4602A0C}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GameNetworking", "GameNetworking\GameNetworking.csproj", "{8CB1D2F4-457E-DC9A-2B1C-5000C4602A0C}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestBench", "TestBench\TestBench.csproj", "{B2E29712-9D3D-7CC4-DC4C-6B13711380E3}"
 EndProject

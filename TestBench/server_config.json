@@ -1,22 +1,16 @@
 {
   "serverName": "Game Server",
   "serverPort": 7777,
-  "serverConnectionKey": "default_key",
-  "serverMaxPlayers": 100,
+  "serverConnectionKey": "key",
+  "serverMaxPlayers": 12,
   "serverGameMode": 0,
   "serverAllowCheats": false,
 
-  "networkTickRate": 60,
+  "networkTickRate": 20,
   "networkDisconnectTimeout": 5000,
-  "networkEnableHeartbeat": true,
-  "networkHeartbeatInterval": 1000,
 
-  "loggingEnableConsole": true,
-  "loggingEnableTick": false,
+  "loggingEnable": true,
   "loggingPlayerEvents": true,
   "loggingNetworkEvents": false,
-  "loggingEnableFile": false,
-  "loggingFilePath": "server.log",
-  "loggingEnableErrors": true,
-  "loggingEnablePerformance": false
+  "loggingFilePath": "server.log"
 }
