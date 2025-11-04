@@ -1,7 +1,7 @@
 # GameServer
 A .NET 9.0 game server/client abstraction built with LiteNetLib.
 
-## Building GameNetworking .dll for general use
+## Building GameNetworking.dll for general use
 ```bash
 ./export-dll.sh
 ```
