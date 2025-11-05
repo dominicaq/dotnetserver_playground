@@ -23,28 +23,62 @@ public class Server(ServerConfig config) {
 
     public async Task Start() {
         lock (_runningLock) {
-            if (IsRunning) { return; }
+            if (IsRunning) return;
 
-            _listener = new();
+            _listener = new EventBasedNetListener();
             _listener.ConnectionRequestEvent += OnConnectionRequest;
             _listener.PeerConnectedEvent += OnPlayerJoined;
             _listener.PeerDisconnectedEvent += OnPlayerLeft;
             _listener.NetworkReceiveEvent += OnMessageReceived;
             _listener.NetworkReceiveUnconnectedEvent += OnUnconnectedMessageReceived;
 
-            _netManager = new(_listener) {
+            _netManager = new NetManager(_listener) {
                 NatPunchEnabled = true
             };
-            _netManager.Start(Config.ServerPort);
 
+            _netManager.Start(Config.ServerPort);
             _tickInterval = 1000 / Config.NetworkTickRate;
+
             _serverThread = new Thread(ServerLoop) { IsBackground = true };
             _serverThread.Start();
 
             IsRunning = true;
         }
 
-        await SetupUPnP();
+        // Step 1: Try hole punching first
+        bool punchSuccess = await TryHolePunch();
+
+        // Step 2: If hole punching fails, fallback to UPnP
+        if (!punchSuccess) {
+            await SetupUPnP();
+        }
+    }
+
+    private async Task<bool> TryHolePunch() {
+        try {
+            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, "Attempting NAT hole punch test...");
+
+            string publicIP = await GetPublicIPAddress();
+            string privateIP = GetLocalIPAddress();
+
+            if (publicIP == "Unable to determine") {
+                ServerEvent?.Invoke(PeerEvent.NetworkError, null, "Could not determine public IP. Hole punching not possible.");
+                return false;
+            }
+
+            using var udpClient = new UdpClient();
+            udpClient.Client.ReceiveTimeout = 3000;
+
+            var target = new IPEndPoint(IPAddress.Parse(publicIP), Config.ServerPort);
+            byte[] testData = System.Text.Encoding.ASCII.GetBytes("NAT_TEST");
+            await udpClient.SendAsync(testData, testData.Length, target);
+
+            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Hole punch test packet sent to {publicIP}:{Config.ServerPort}");
+            return true;
+        } catch (Exception ex) {
+            ServerEvent?.Invoke(PeerEvent.NetworkError, null, $"Hole punch test failed: {ex.Message}");
+            return false;
+        }
     }
 
     private void ServerLoop() {
