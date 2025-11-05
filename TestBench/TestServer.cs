@@ -1,7 +1,5 @@
 using GameNetworking;
 using LiteNetLib;
-using System.Net;
-using System.Net.Sockets;
 
 namespace TestBench;
 
@@ -17,7 +15,7 @@ public class TestServer {
 
         Console.WriteLine("\n=== Connection Information ===");
         Console.WriteLine($"Local IP: {server.LocalIP}");
-        Console.WriteLine($"Public IP: {await server.PublicIP}");
+        Console.WriteLine($"Public IP: {server.PublicIP}");
         Console.WriteLine($"Port: {config.ServerPort}");
         Console.WriteLine("==============================\n");
         Console.WriteLine("Press 'q' to quit, 's' to show server info");

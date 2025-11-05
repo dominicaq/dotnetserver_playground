@@ -24,6 +24,7 @@ public class ServerConfig {
     // Network settings
     public int NetworkTickRate { get; set; } = 60;
     public int NetworkDisconnectTimeout { get; set; } = 5000;
+    public bool NetworkEnableUPnP { get; set; } = false;
 
     // Logging
     public bool LoggingEnable { get; set; } = true;

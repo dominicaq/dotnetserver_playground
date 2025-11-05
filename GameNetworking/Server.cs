@@ -2,7 +2,6 @@ using LiteNetLib;
 using LiteNetLib.Utils;
 using Open.Nat;
 using System.Net;
-using System.Net.Sockets;
 
 namespace GameNetworking;
 
@@ -10,6 +9,8 @@ public class Server(ServerConfig config) {
     public ServerConfig Config { get; private set; } = config;
     public event Action<PeerEvent, NetPeer?, object?>? ServerEvent;
     public bool IsRunning { get; private set; }
+    public string LocalIP { get; private set; } = "127.0.0.1";
+    public string PublicIP { get; private set; } = "Unknown";
 
     private int _tickInterval;
     private readonly Lock _runningLock = new();
@@ -23,7 +24,9 @@ public class Server(ServerConfig config) {
 
     public async Task Start() {
         lock (_runningLock) {
-            if (IsRunning) return;
+            if (IsRunning) {
+                return;
+            }
 
             _listener = new EventBasedNetListener();
             _listener.ConnectionRequestEvent += OnConnectionRequest;
@@ -33,7 +36,7 @@ public class Server(ServerConfig config) {
             _listener.NetworkReceiveUnconnectedEvent += OnUnconnectedMessageReceived;
 
             _netManager = new NetManager(_listener) {
-                NatPunchEnabled = true
+                NatPunchEnabled = false
             };
 
             _netManager.Start(Config.ServerPort);
@@ -45,39 +48,11 @@ public class Server(ServerConfig config) {
             IsRunning = true;
         }
 
-        // Step 1: Try hole punching first
-        bool punchSuccess = await TryHolePunch();
+        LocalIP = NetworkUtils.GetLocalIPAddress();
+        PublicIP = await NetworkUtils.GetPublicIPAddress();
 
-        // Step 2: If hole punching fails, fallback to UPnP
-        if (!punchSuccess) {
+        if (Config.NetworkEnableUPnP) {
             await SetupUPnP();
-        }
-    }
-
-    private async Task<bool> TryHolePunch() {
-        try {
-            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, "Attempting NAT hole punch test...");
-
-            string publicIP = await GetPublicIPAddress();
-            string privateIP = GetLocalIPAddress();
-
-            if (publicIP == "Unable to determine") {
-                ServerEvent?.Invoke(PeerEvent.NetworkError, null, "Could not determine public IP. Hole punching not possible.");
-                return false;
-            }
-
-            using var udpClient = new UdpClient();
-            udpClient.Client.ReceiveTimeout = 3000;
-
-            var target = new IPEndPoint(IPAddress.Parse(publicIP), Config.ServerPort);
-            byte[] testData = System.Text.Encoding.ASCII.GetBytes("NAT_TEST");
-            await udpClient.SendAsync(testData, testData.Length, target);
-
-            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Hole punch test packet sent to {publicIP}:{Config.ServerPort}");
-            return true;
-        } catch (Exception ex) {
-            ServerEvent?.Invoke(PeerEvent.NetworkError, null, $"Hole punch test failed: {ex.Message}");
-            return false;
         }
     }
 
@@ -89,7 +64,9 @@ public class Server(ServerConfig config) {
     }
 
     public async Task Stop() {
-        await CleanupUPnP();
+        if (Config.NetworkEnableUPnP) {
+            await CleanupUPnP();
+        }
 
         lock (_runningLock) {
             if (!IsRunning) { return; }
@@ -123,7 +100,7 @@ public class Server(ServerConfig config) {
         }
     }
 
-    private void OnUnconnectedMessageReceived(System.Net.IPEndPoint remoteEndPoint, NetPacketReader reader, UnconnectedMessageType messageType) {
+    private void OnUnconnectedMessageReceived(IPEndPoint remoteEndPoint, NetPacketReader reader, UnconnectedMessageType messageType) {
         try {
             ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Unconnected message from {remoteEndPoint}");
         } catch (Exception ex) {
@@ -149,7 +126,7 @@ public class Server(ServerConfig config) {
 
     private void OnPlayerJoined(NetPeer peer) {
         string clientIP = peer.Address.ToString();
-        bool isLan = IsLanIP(peer.Address);
+        bool isLan = NetworkUtils.IsLanIP(peer.Address);
 
         ServerEvent?.Invoke(PeerEvent.Connected, peer,
             $"Client connected from {clientIP} ({(isLan ? "LAN" : "External")})");
@@ -199,7 +176,7 @@ public class Server(ServerConfig config) {
     }
 
     // -------------------------------------------------------------------------
-    // UPnP
+    // UPnP (optional fallback)
     // -------------------------------------------------------------------------
     private NatDevice? _natDevice;
     private Mapping? _portMapping;
@@ -226,10 +203,9 @@ public class Server(ServerConfig config) {
             ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Creating port mapping for UDP {Config.ServerPort}...");
             await _natDevice.CreatePortMapAsync(_portMapping);
 
-            string publicIP = await GetPublicIPAddress();
-            string privateIP = GetLocalIPAddress();
+
             ServerEvent?.Invoke(PeerEvent.NetworkInfo, null,
-                $"UPnP Success — Private IP: {privateIP}:{Config.ServerPort}, Public IP: {publicIP}:{Config.ServerPort}");
+                $"UPnP Success — Private IP: {LocalIP}:{Config.ServerPort}, Public IP: {PublicIP}:{Config.ServerPort}");
         } catch (Exception ex) {
             ServerEvent?.Invoke(PeerEvent.NetworkError, null, $"UPnP setup failed: {ex.Message}");
         }
@@ -244,79 +220,5 @@ public class Server(ServerConfig config) {
                 // Ignore cleanup errors
             }
         }
-    }
-
-    // -------------------------------------------------------------------------
-    // IP helpers
-    // -------------------------------------------------------------------------
-    public string LocalIP => GetLocalIPAddress();
-    public Task<string> PublicIP => GetPublicIPAddress();
-
-    private static string GetLocalIPAddress() {
-        try {
-            foreach (var iface in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()) {
-                if (iface.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) {
-                    continue;
-                }
-
-
-                var props = iface.GetIPProperties();
-                foreach (var addr in props.UnicastAddresses) {
-                    if (addr.Address.AddressFamily == AddressFamily.InterNetwork &&
-                        !IPAddress.IsLoopback(addr.Address)) {
-                        return addr.Address.ToString();
-                    }
-                }
-            }
-            return "127.0.0.1";
-        } catch {
-            return "Unable to determine";
-        }
-    }
-
-    private static async Task<string> GetPublicIPAddress() {
-        try {
-            using var httpClient = new HttpClient();
-            httpClient.Timeout = TimeSpan.FromSeconds(5);
-
-            string[] services = {
-                "https://checkip.amazonaws.com",
-                "https://api.ipify.org",
-                "https://icanhazip.com"
-            };
-
-            foreach (var service in services) {
-                try {
-                    string ip = await httpClient.GetStringAsync(service);
-                    if (!string.IsNullOrWhiteSpace(ip)) {
-                        return ip.Trim();
-                    }
-                } catch {
-                    continue;
-                }
-            }
-
-            return "Unable to determine";
-        } catch {
-            return "Unable to determine";
-        }
-    }
-
-    private static bool IsLanIP(IPAddress ip) {
-        byte[] bytes = ip.GetAddressBytes();
-
-        if (bytes[0] == 10) {
-            return true;
-        }
-
-        if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) {
-            return true;
-        }
-
-        if (bytes[0] == 192 && bytes[1] == 168) {
-            return true;
-        }
-
-        return false;
     }
 }

@@ -1,3 +1,5 @@
+using System;
+using System.Net;
 using LiteNetLib;
 using LiteNetLib.Utils;
 
@@ -10,31 +12,61 @@ public class Client {
 
     private readonly Lock _connectionLock = new();
     private EventBasedNetListener? _listener;
+    private EventBasedNatPunchListener? _natListener;
     private NetManager? _netManager;
     private NetPeer? _serverPeer;
 
     public void Init() {
-        _listener = new();
+        _listener = new EventBasedNetListener();
+        _natListener = new EventBasedNatPunchListener();
+
+        _netManager = new NetManager(_listener) {
+            NatPunchEnabled = true
+        };
+
+        // Attach the NAT listener
+        _netManager.NatPunchModule.Init(_natListener);
+
+        _natListener.NatIntroductionSuccess += OnNatIntroductionSuccess;
+        _natListener.NatIntroductionRequest += OnNatIntroductionRequest;
+
         _listener.PeerConnectedEvent += OnConnectedToServer;
         _listener.PeerDisconnectedEvent += OnDisconnectedFromServer;
         _listener.NetworkReceiveEvent += OnMessageReceived;
         _listener.NetworkReceiveUnconnectedEvent += OnUnconnectedMessageReceived;
 
-        _netManager = new(_listener) {
-            NatPunchEnabled = true
-        };
         _netManager.Start();
     }
 
+    // -------------------------------------------------------------------------
+    // NAT punchthrough callbacks
+    // -------------------------------------------------------------------------
+    private void OnNatIntroductionSuccess(IPEndPoint targetEndPoint, NatAddressType type, string token) {
+        ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, $"NAT punch successful to {targetEndPoint} (token: {token})");
+        _netManager?.Connect(targetEndPoint, token);
+    }
+
+    private void OnNatIntroductionRequest(System.Net.IPEndPoint localEndPoint, System.Net.IPEndPoint remoteEndPoint, string token) {
+        ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Received NAT introduction request from {remoteEndPoint} with token {token}");
+    }
+
+    // -------------------------------------------------------------------------
+    // Default Connect (tries NAT punch automatically)
+    // -------------------------------------------------------------------------
     public void Connect(string serverAddress, int serverPort, string connectionKey = "") {
         lock (_connectionLock) {
-            if (IsConnected || IsConnecting || _netManager == null) { return; }
+            if (IsConnected || IsConnecting || _netManager == null) {
+                return;
+            }
 
-            var connectionData = new NetDataWriter();
-            connectionData.Put(connectionKey);
-
-            _netManager.Connect(serverAddress, serverPort, connectionData);
             IsConnecting = true;
+            ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Attempting NAT punchthrough via {serverAddress}:{serverPort}...");
+
+            _netManager.NatPunchModule.SendNatIntroduceRequest(
+                serverAddress,
+                serverPort,
+                connectionKey
+            );
         }
     }
 
@@ -44,7 +76,10 @@ public class Client {
 
     public void Disconnect() {
         lock (_connectionLock) {
-            if (!IsConnected && !IsConnecting) { return; }
+            if (!IsConnected && !IsConnecting) {
+                return;
+            }
+
             IsConnected = false;
             IsConnecting = false;
             _serverPeer?.Disconnect();
@@ -78,6 +113,7 @@ public class Client {
             if (reader.AvailableBytes == 0) {
                 return;
             }
+
             var messageData = reader.GetRemainingBytes();
             ClientEvent?.Invoke(PeerEvent.MessageReceived, peer, messageData);
         } catch (Exception ex) {
@@ -101,35 +137,20 @@ public class Client {
     // Data sending
     // -------------------------------------------------------------------------
     public void SendToServer(NetDataWriter writer, DeliveryMethod method = DeliveryMethod.ReliableOrdered) {
-        if (!IsValidConnection()) { return; }
+        if (!IsValidConnection()) {
+            return;
+        }
         _serverPeer!.Send(writer, method);
     }
 
     // -------------------------------------------------------------------------
-    // NAT Hole Punching
-    // -------------------------------------------------------------------------
-    public void ConnectThroughNAT(string facilitatorAddress, int facilitatorPort, string targetToken) {
-        if (_netManager == null) { return; }
-
-        // Send NAT punch request through the facilitator server
-        _netManager.NatPunchModule.SendNatIntroduceRequest(
-            facilitatorAddress,
-            facilitatorPort,
-            targetToken
-        );
-
-        ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, $"NAT punch request sent for token: {targetToken}");
-    }
-
-    // -------------------------------------------------------------------------
-    // Client util
+    // Utility
     // -------------------------------------------------------------------------
     public NetPeer? GetServerPeer() => _serverPeer;
 
-    public int GetServerLatency() {
-        if (_serverPeer == null || !IsConnected) { return -1; }
-        return _serverPeer.Ping;
-    }
+    public int GetServerLatency() =>
+        _serverPeer == null || !IsConnected ? -1 : _serverPeer.Ping;
 
-    public bool IsValidConnection() => _netManager != null && IsConnected && _serverPeer != null;
+    public bool IsValidConnection() =>
+        _netManager != null && IsConnected && _serverPeer != null;
 }

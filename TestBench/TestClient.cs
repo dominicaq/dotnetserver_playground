@@ -94,7 +94,7 @@ public class TestClient {
             return;
         }
 
-        _client.ConnectThroughNAT(facilitatorAddress, facilitatorPort, token);
+        // _client.ConnectThroughNAT(facilitatorAddress, facilitatorPort, token);
         Console.WriteLine($"NAT punch request sent to {facilitatorAddress}:{facilitatorPort} for token: {token}");
     }
 

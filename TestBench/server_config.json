@@ -8,6 +8,7 @@
 
   "networkTickRate": 20,
   "networkDisconnectTimeout": 5000,
+  "networkEnableUPnP": false,
 
   "loggingEnable": true,
   "loggingPlayerEvents": true,
