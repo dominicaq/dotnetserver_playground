@@ -11,16 +11,15 @@ public class TestServer {
 
         ServerConfig config = ServerConfig.LoadFromFile("server_config.json");
 
-        // Print connection information
-        Console.WriteLine("\n=== Connection Information ===");
-        Console.WriteLine($"Local IP: {GetLocalIPAddress()}");
-        Console.WriteLine($"Port: {config.ServerPort}");
-        Console.WriteLine("==============================\n");
-
         Server server = new(config);
         server.ServerEvent += OnServerEvent;
         await server.Start();
 
+        Console.WriteLine("\n=== Connection Information ===");
+        Console.WriteLine($"Local IP: {server.LocalIP}");
+        Console.WriteLine($"Public IP: {await server.PublicIP}");
+        Console.WriteLine($"Port: {config.ServerPort}");
+        Console.WriteLine("==============================\n");
         Console.WriteLine("Press 'q' to quit, 's' to show server info");
 
         bool running = true;
@@ -40,20 +39,6 @@ public class TestServer {
 
         await server.Stop();
         Console.WriteLine("Server shutdown complete.");
-    }
-
-    private static string GetLocalIPAddress() {
-        try {
-            var host = Dns.GetHostEntry(Dns.GetHostName());
-            foreach (var ip in host.AddressList) {
-                if (ip.AddressFamily == AddressFamily.InterNetwork) {
-                    return ip.ToString();
-                }
-            }
-            return "127.0.0.1";
-        } catch {
-            return "Unable to determine";
-        }
     }
 
     private static void OnServerEvent(PeerEvent eventType, NetPeer? peer, object? data) {
@@ -78,7 +63,6 @@ public class TestServer {
 
     private static void ShowServerInfo(Server server) {
         Console.WriteLine("\n=== Server Info ===");
-        Console.WriteLine($"Local IP: {GetLocalIPAddress()}");
         Console.WriteLine($"Server Name: {server.Config.ServerName}");
         Console.WriteLine($"Port: {server.Config.ServerPort}");
         Console.WriteLine($"Max Players: {server.Config.ServerMaxPlayers}");

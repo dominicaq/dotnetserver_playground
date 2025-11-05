@@ -21,7 +21,7 @@ public class Client {
         _listener.NetworkReceiveUnconnectedEvent += OnUnconnectedMessageReceived;
 
         _netManager = new(_listener) {
-        NatPunchEnabled = true // Enable NAT hole punching
+            NatPunchEnabled = true
         };
         _netManager.Start();
     }
@@ -30,11 +30,9 @@ public class Client {
         lock (_connectionLock) {
             if (IsConnected || IsConnecting || _netManager == null) { return; }
 
-            // Create connection data with the connection key
             var connectionData = new NetDataWriter();
             connectionData.Put(connectionKey);
 
-            // Attempt to connect to server
             _netManager.Connect(serverAddress, serverPort, connectionData);
             IsConnecting = true;
         }

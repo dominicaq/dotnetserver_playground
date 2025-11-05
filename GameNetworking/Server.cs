@@ -1,6 +1,8 @@
 using LiteNetLib;
 using LiteNetLib.Utils;
 using Open.Nat;
+using System.Net;
+using System.Net.Sockets;
 
 namespace GameNetworking;
 
@@ -111,7 +113,14 @@ public class Server(ServerConfig config) {
         }
     }
 
-    private void OnPlayerJoined(NetPeer peer) => ServerEvent?.Invoke(PeerEvent.Connected, peer, null);
+    private void OnPlayerJoined(NetPeer peer) {
+        string clientIP = peer.Address.ToString();
+        bool isLan = IsLanIP(peer.Address);
+
+        ServerEvent?.Invoke(PeerEvent.Connected, peer,
+            $"Client connected from {clientIP} ({(isLan ? "LAN" : "External")})");
+    }
+
     private void OnPlayerLeft(NetPeer peer, DisconnectInfo info) => ServerEvent?.Invoke(PeerEvent.Disconnected, peer, info);
 
     // -------------------------------------------------------------------------
@@ -166,7 +175,7 @@ public class Server(ServerConfig config) {
             ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, "Attempting UPnP port forwarding...");
 
             var discoverer = new NatDiscoverer();
-            var cts = new CancellationTokenSource(5000);
+            using var cts = new CancellationTokenSource(5000);
 
             ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, "Discovering NAT device...");
             _natDevice = await discoverer.DiscoverDeviceAsync(PortMapper.Upnp | PortMapper.Pmp, cts);
@@ -180,28 +189,15 @@ public class Server(ServerConfig config) {
                 "Game Server"
             );
 
-            // Try to delete any existing mapping first
-            try {
-                await _natDevice.DeletePortMapAsync(_portMapping);
-                ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, "Removed existing port mapping");
-            } catch {
-                // Ignore if no existing mapping
-            }
-
             ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Creating port mapping for UDP {Config.ServerPort}...");
             await _natDevice.CreatePortMapAsync(_portMapping);
 
-            var externalIP = await _natDevice.GetExternalIPAsync();
-            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"UPnP Success - External IP: {externalIP}:{Config.ServerPort}");
-
-        } catch (NatDeviceNotFoundException ex) {
-            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"UPnP not available: {ex.Message}");
-        } catch (MappingException ex) {
-            ServerEvent?.Invoke(PeerEvent.NetworkError, null, $"UPnP port mapping failed: {ex.Message}");
-        } catch (OperationCanceledException) {
-            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, "UPnP discovery timed out");
+            string publicIP = await GetPublicIPAddress();
+            string privateIP = GetLocalIPAddress();
+            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null,
+                $"UPnP Success — Private IP: {privateIP}:{Config.ServerPort}, Public IP: {publicIP}:{Config.ServerPort}");
         } catch (Exception ex) {
-            ServerEvent?.Invoke(PeerEvent.NetworkError, null, $"UPnP error: {ex.GetType().Name} - {ex.Message}");
+            ServerEvent?.Invoke(PeerEvent.NetworkError, null, $"UPnP setup failed: {ex.Message}");
         }
     }
 
@@ -214,5 +210,79 @@ public class Server(ServerConfig config) {
                 // Ignore cleanup errors
             }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // IP helpers
+    // -------------------------------------------------------------------------
+    public string LocalIP => GetLocalIPAddress();
+    public Task<string> PublicIP => GetPublicIPAddress();
+
+    private static string GetLocalIPAddress() {
+        try {
+            foreach (var iface in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()) {
+                if (iface.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) {
+                    continue;
+                }
+
+
+                var props = iface.GetIPProperties();
+                foreach (var addr in props.UnicastAddresses) {
+                    if (addr.Address.AddressFamily == AddressFamily.InterNetwork &&
+                        !IPAddress.IsLoopback(addr.Address)) {
+                        return addr.Address.ToString();
+                    }
+                }
+            }
+            return "127.0.0.1";
+        } catch {
+            return "Unable to determine";
+        }
+    }
+
+    private static async Task<string> GetPublicIPAddress() {
+        try {
+            using var httpClient = new HttpClient();
+            httpClient.Timeout = TimeSpan.FromSeconds(5);
+
+            string[] services = {
+                "https://checkip.amazonaws.com",
+                "https://api.ipify.org",
+                "https://icanhazip.com"
+            };
+
+            foreach (var service in services) {
+                try {
+                    string ip = await httpClient.GetStringAsync(service);
+                    if (!string.IsNullOrWhiteSpace(ip)) {
+                        return ip.Trim();
+                    }
+                } catch {
+                    continue;
+                }
+            }
+
+            return "Unable to determine";
+        } catch {
+            return "Unable to determine";
+        }
+    }
+
+    private static bool IsLanIP(IPAddress ip) {
+        byte[] bytes = ip.GetAddressBytes();
+
+        if (bytes[0] == 10) {
+            return true;
+        }
+
+        if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) {
+            return true;
+        }
+
+        if (bytes[0] == 192 && bytes[1] == 168) {
+            return true;
+        }
+
+        return false;
     }
 }
