@@ -5,5 +5,6 @@ public enum PeerEvent {
     Connected,
     Disconnected,
     MessageReceived,
-    NetworkError
+    NetworkError,
+    NetworkInfo
 }

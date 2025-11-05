@@ -4,14 +4,14 @@ using LiteNetLib;
 namespace TestBench;
 
 public class TestServer {
-    public static void Run(string[] args) {
+    public static async Task Run(string[] args) {
         Console.WriteLine("Starting Game Server Test Host...");
 
         ServerConfig config = ServerConfig.LoadFromFile("server_config.json");
-        Server server = new(config);
 
+        Server server = new(config);
         server.ServerEvent += OnServerEvent;
-        server.Start();
+        await server.Start();
 
         Console.WriteLine("Press 'q' to quit, 's' to show server info");
 
@@ -30,7 +30,7 @@ public class TestServer {
             }
         }
 
-        server.Stop();
+        await server.Stop();
         Console.WriteLine("Server shutdown complete.");
     }
 

@@ -1,11 +1,12 @@
 using LiteNetLib;
 using LiteNetLib.Utils;
+using Open.Nat;
 
 namespace GameNetworking;
 
 public class Server(ServerConfig config) {
     public ServerConfig Config { get; private set; } = config;
-    public event Action<PeerEvent, NetPeer, object?>? ServerEvent;
+    public event Action<PeerEvent, NetPeer?, object?>? ServerEvent;
     public bool IsRunning { get; private set; }
 
     private int _tickInterval;
@@ -16,7 +17,9 @@ public class Server(ServerConfig config) {
     private NetManager? _netManager;
     private Thread? _serverThread;
 
-    public void Start() {
+    private bool ValidateServer() => _netManager != null && IsRunning;
+
+    public async Task Start() {
         lock (_runningLock) {
             if (IsRunning) { return; }
 
@@ -35,6 +38,8 @@ public class Server(ServerConfig config) {
 
             IsRunning = true;
         }
+
+        await SetupUPnP();
     }
 
     private void ServerLoop() {
@@ -44,7 +49,9 @@ public class Server(ServerConfig config) {
         }
     }
 
-    public void Stop() {
+    public async Task Stop() {
+        await CleanupUPnP();
+
         lock (_runningLock) {
             if (!IsRunning) { return; }
 
@@ -103,46 +110,14 @@ public class Server(ServerConfig config) {
     // -------------------------------------------------------------------------
     // Data sending
     // -------------------------------------------------------------------------
-    // Peer sending
-    public void SendToPeerReliable(NetPeer peer, byte[] data) {
+    public void SendToPeer(NetPeer peer, NetDataWriter writer, DeliveryMethod method = DeliveryMethod.ReliableOrdered) {
         if (!ValidateServer()) { return; }
-        peer.Send(data, DeliveryMethod.ReliableOrdered);
+        peer.Send(writer, method);
     }
 
-    public void SendToPeerReliable(NetPeer peer, NetDataWriter writer) {
+    public void BroadcastToAll(NetDataWriter writer, DeliveryMethod method = DeliveryMethod.ReliableOrdered) {
         if (!ValidateServer()) { return; }
-        peer.Send(writer, DeliveryMethod.ReliableOrdered);
-    }
-
-    public void SendToPeerUnreliable(NetPeer peer, byte[] data) {
-        if (!ValidateServer()) { return; }
-        peer.Send(data, DeliveryMethod.Unreliable);
-    }
-
-    public void SendToPeerUnreliable(NetPeer peer, NetDataWriter writer) {
-        if (!ValidateServer()) { return; }
-        peer.Send(writer, DeliveryMethod.Unreliable);
-    }
-
-    // Server broadcasting
-    public void BroadcastToAllReliable(byte[] data) {
-        if (!ValidateServer()) { return; }
-        _netManager!.SendToAll(data, DeliveryMethod.ReliableOrdered);
-    }
-
-    public void BroadcastToAllReliable(NetDataWriter writer) {
-        if (!ValidateServer()) { return; }
-        _netManager!.SendToAll(writer, DeliveryMethod.ReliableOrdered);
-    }
-
-    public void BroadcastToAllUnreliable(byte[] data) {
-        if (!ValidateServer()) { return; }
-        _netManager!.SendToAll(data, DeliveryMethod.Unreliable);
-    }
-
-    public void BroadcastToAllUnreliable(NetDataWriter writer) {
-        if (!ValidateServer()) { return; }
-        _netManager!.SendToAll(writer, DeliveryMethod.Unreliable);
+        _netManager!.SendToAll(writer, method);
     }
 
     // -------------------------------------------------------------------------
@@ -174,7 +149,55 @@ public class Server(ServerConfig config) {
     }
 
     // -------------------------------------------------------------------------
-    // Misc util
+    // UPnP
     // -------------------------------------------------------------------------
-    private bool ValidateServer() => _netManager != null && IsRunning;
+    private NatDevice? _natDevice;
+    private Mapping? _portMapping;
+
+    private async Task SetupUPnP() {
+        try {
+            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, "Attempting UPnP port forwarding...");
+
+            var discoverer = new NatDiscoverer();
+            var cts = new CancellationTokenSource(5000); // 5 seconds
+
+            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, "Discovering NAT device...");
+            _natDevice = await discoverer.DiscoverDeviceAsync(PortMapper.Upnp | PortMapper.Pmp, cts);
+
+            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Found NAT device: {_natDevice.GetType().Name}");
+
+            _portMapping = new Mapping(
+                Protocol.Udp,
+                Config.ServerPort,
+                Config.ServerPort,
+                "Game Server"
+            );
+
+            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Creating port mapping for UDP {Config.ServerPort}...");
+            await _natDevice.CreatePortMapAsync(_portMapping);
+
+            var externalIP = await _natDevice.GetExternalIPAsync();
+            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"UPnP Success - External IP: {externalIP}:{Config.ServerPort}");
+
+        } catch (NatDeviceNotFoundException ex) {
+            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"UPnP not available: {ex.Message}");
+        } catch (MappingException ex) {
+            ServerEvent?.Invoke(PeerEvent.NetworkError, null, $"UPnP port mapping failed: {ex.Message}");
+        } catch (OperationCanceledException) {
+            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, "UPnP discovery timed out");
+        } catch (Exception ex) {
+            ServerEvent?.Invoke(PeerEvent.NetworkError, null, $"UPnP error: {ex.GetType().Name} - {ex.Message}");
+        }
+    }
+
+    private async Task CleanupUPnP() {
+        if (_natDevice != null && _portMapping != null) {
+            try {
+                await _natDevice.DeletePortMapAsync(_portMapping);
+                ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, "UPnP port mapping removed");
+            } catch {
+                // Ignore cleanup errors
+            }
+        }
+    }
 }

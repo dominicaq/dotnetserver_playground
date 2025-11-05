@@ -91,6 +91,14 @@ public class Client {
     }
 
     // -------------------------------------------------------------------------
+    // Data sending
+    // -------------------------------------------------------------------------
+    public void SendToServer(NetDataWriter writer, DeliveryMethod method = DeliveryMethod.ReliableOrdered) {
+        if (!IsValidConnection()) { return; }
+        _serverPeer!.Send(writer, method);
+    }
+
+    // -------------------------------------------------------------------------
     // Client util
     // -------------------------------------------------------------------------
     public NetPeer? GetServerPeer() => _serverPeer;
