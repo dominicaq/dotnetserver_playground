@@ -5,18 +5,28 @@ namespace TestBench;
 
 public class TestClient {
     private static Client? _client;
+    private static string _serverAddress = "127.0.0.1";
+    private static int _serverPort = 7777;
+    private static string _connectionKey = "key";
 
     public static void Run(string[] args) {
         Console.WriteLine("Starting Test Client...");
 
+        // Parse command line arguments: dotnet run client <address> <port> <key>
+        if (args.Length > 1) { _serverAddress = args[1]; }
+        if (args.Length > 2) { _ = int.TryParse(args[2], out _serverPort); }
+        if (args.Length > 3) { _connectionKey = args[3]; }
+
+        Console.WriteLine($"Target server: {_serverAddress}:{_serverPort}");
+
         _client = new Client();
         _client.Init();
-
         _client.ClientEvent += OnClientEvent;
 
         ConnectToServer();
 
-        Console.WriteLine("Press 'r' to reconnect, 'd' to disconnect, 'q' to quit");
+        Console.WriteLine("Press 'r' to reconnect, 'd' to disconnect, 'n' for NAT punch, 'q' to quit");
+
         bool running = true;
         while (running) {
             _client.Update();
@@ -36,8 +46,13 @@ public class TestClient {
                     case 'D':
                         DisconnectFromServer();
                         break;
+                    case 'n':
+                    case 'N':
+                        ConnectThroughNAT();
+                        break;
                 }
             }
+
             Thread.Sleep(15);
         }
 
@@ -51,8 +66,36 @@ public class TestClient {
             return;
         }
 
-        _client?.Connect("127.0.0.1", 7777, "key");
-        Console.WriteLine("Attempting to connect to server...");
+        _client?.Connect(_serverAddress, _serverPort, _connectionKey);
+        Console.WriteLine($"Attempting to connect to {_serverAddress}:{_serverPort}...");
+    }
+
+    private static void ConnectThroughNAT() {
+        if (_client == null) {
+            Console.WriteLine("Client not initialized!");
+            return;
+        }
+
+        Console.Write($"Enter facilitator address (default: {_serverAddress}): ");
+        string? facilitatorAddress = Console.ReadLine();
+        if (string.IsNullOrWhiteSpace(facilitatorAddress)) {
+            facilitatorAddress = _serverAddress;
+        }
+
+        Console.Write($"Enter facilitator port (default: {_serverPort}): ");
+        string? portInput = Console.ReadLine();
+        int facilitatorPort = int.TryParse(portInput, out int port) ? port : _serverPort;
+
+        Console.Write("Enter target player token: ");
+        string? token = Console.ReadLine();
+
+        if (string.IsNullOrWhiteSpace(token)) {
+            Console.WriteLine("Token cannot be empty!");
+            return;
+        }
+
+        _client.ConnectThroughNAT(facilitatorAddress, facilitatorPort, token);
+        Console.WriteLine($"NAT punch request sent to {facilitatorAddress}:{facilitatorPort} for token: {token}");
     }
 
     private static void DisconnectFromServer() {
@@ -65,21 +108,26 @@ public class TestClient {
     }
 
     private static void OnClientEvent(PeerEvent eventType, NetPeer? peer, object? data) {
+        string timestamp = DateTime.Now.ToString("HH:mm:ss");
+
         switch (eventType) {
             case PeerEvent.Connected:
-                Console.WriteLine($"Connected to server: {peer?.Address}:{peer?.Port}");
+                Console.WriteLine($"[{timestamp}] Connected to server: {peer?.Address}:{peer?.Port}");
                 break;
             case PeerEvent.Disconnected:
                 var disconnectInfo = (DisconnectInfo?)data;
-                Console.WriteLine($"Disconnected: {disconnectInfo?.Reason}");
+                Console.WriteLine($"[{timestamp}] Disconnected: {disconnectInfo?.Reason}");
                 break;
             case PeerEvent.MessageReceived:
                 var messageData = (byte[]?)data;
-                Console.WriteLine($"Received message from server (bytes: {messageData?.Length})");
+                Console.WriteLine($"[{timestamp}] Received message from server (bytes: {messageData?.Length})");
                 break;
             case PeerEvent.NetworkError:
                 var exception = (Exception?)data;
-                Console.WriteLine($"Network error: {exception?.Message}");
+                Console.WriteLine($"[{timestamp}] Network error: {exception?.Message}");
+                break;
+            case PeerEvent.NetworkInfo:
+                Console.WriteLine($"[{timestamp}] Network info: {data}");
                 break;
         }
     }

@@ -28,8 +28,11 @@ public class Server(ServerConfig config) {
             _listener.PeerConnectedEvent += OnPlayerJoined;
             _listener.PeerDisconnectedEvent += OnPlayerLeft;
             _listener.NetworkReceiveEvent += OnMessageReceived;
+            _listener.NetworkReceiveUnconnectedEvent += OnUnconnectedMessageReceived;
 
-            _netManager = new(_listener);
+            _netManager = new(_listener) {
+                NatPunchEnabled = true
+            };
             _netManager.Start(Config.ServerPort);
 
             _tickInterval = 1000 / Config.NetworkTickRate;
@@ -70,21 +73,25 @@ public class Server(ServerConfig config) {
     // Peer events
     // -------------------------------------------------------------------------
     private void OnMessageReceived(NetPeer peer, NetPacketReader reader, byte channel, DeliveryMethod deliveryMethod) {
-        // TODO: not done
         try {
             if (reader.AvailableBytes == 0) {
                 return;
             }
 
-            // Read the message - assuming you'll have some kind of message structure
-            // You might want to read a message type first, then the actual data
             var messageData = reader.GetRemainingBytes();
-
             ServerEvent?.Invoke(PeerEvent.MessageReceived, peer, messageData);
         } catch (Exception ex) {
-            // Log the exception or handle it appropriately
-            // For now, just invoke an error event if you want
             ServerEvent?.Invoke(PeerEvent.NetworkError, peer, ex);
+        } finally {
+            reader.Recycle();
+        }
+    }
+
+    private void OnUnconnectedMessageReceived(System.Net.IPEndPoint remoteEndPoint, NetPacketReader reader, UnconnectedMessageType messageType) {
+        try {
+            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Unconnected message from {remoteEndPoint}");
+        } catch (Exception ex) {
+            ServerEvent?.Invoke(PeerEvent.NetworkError, null, $"Unconnected message error: {ex.Message}");
         } finally {
             reader.Recycle();
         }
@@ -159,7 +166,7 @@ public class Server(ServerConfig config) {
             ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, "Attempting UPnP port forwarding...");
 
             var discoverer = new NatDiscoverer();
-            var cts = new CancellationTokenSource(5000); // 5 seconds
+            var cts = new CancellationTokenSource(5000);
 
             ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, "Discovering NAT device...");
             _natDevice = await discoverer.DiscoverDeviceAsync(PortMapper.Upnp | PortMapper.Pmp, cts);
@@ -172,6 +179,14 @@ public class Server(ServerConfig config) {
                 Config.ServerPort,
                 "Game Server"
             );
+
+            // Try to delete any existing mapping first
+            try {
+                await _natDevice.DeletePortMapAsync(_portMapping);
+                ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, "Removed existing port mapping");
+            } catch {
+                // Ignore if no existing mapping
+            }
 
             ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Creating port mapping for UDP {Config.ServerPort}...");
             await _natDevice.CreatePortMapAsync(_portMapping);
