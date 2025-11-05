@@ -1,13 +1,11 @@
-﻿using System;
-
-namespace TestBench;
+﻿namespace TestBench;
 
 public class Program {
-  public static void Main(string[] args) {
-    if (args.Length > 0 && args[0].ToLower() == "client") {
-      TestClient.Run(args);
-    } else {
-      TestServer.Run(args);
+    public static void Main(string[] args) {
+        if (args.Length > 0 && args[0].Equals("client", StringComparison.CurrentCultureIgnoreCase)) {
+            TestClient.Run(args);
+        } else {
+            TestServer.Run(args);
+        }
     }
-  }
 }

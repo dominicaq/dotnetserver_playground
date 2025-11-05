@@ -1,12 +1,5 @@
 namespace GameNetworking;
 
-public enum ClientEvent {
-    Connected,
-    Disconnected,
-    MessageReceived,
-    NetworkError
-}
-
 public enum PeerEvent {
     ConnectionRequested,
     Connected,
@@ -14,4 +7,3 @@ public enum PeerEvent {
     MessageReceived,
     NetworkError
 }
-

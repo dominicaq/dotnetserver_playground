@@ -1,32 +1,25 @@
+using GameNetworking;
 using LiteNetLib;
-using LiteNetLib.Utils;
 
 namespace TestBench;
 
 public class TestClient {
-    private static NetManager? _netManager;
-    private static NetPeer? _server;
-    private static EventBasedNetListener? _listener;
+    private static Client? _client;
 
     public static void Run(string[] args) {
         Console.WriteLine("Starting Test Client...");
 
-        _listener = new EventBasedNetListener();
-        _netManager = new NetManager(_listener);
+        _client = new Client();
+        _client.Init();
 
-        _listener.PeerConnectedEvent += OnConnected;
-        _listener.PeerDisconnectedEvent += OnDisconnected;
-        _listener.NetworkReceiveEvent += OnMessageReceived;
-
-        _netManager.Start();
+        _client.ClientEvent += OnClientEvent;
 
         ConnectToServer();
 
         Console.WriteLine("Press 'r' to reconnect, 'd' to disconnect, 'q' to quit");
-
         bool running = true;
         while (running) {
-            _netManager.PollEvents();
+            _client.Update();
 
             if (Console.KeyAvailable) {
                 ConsoleKeyInfo key = Console.ReadKey(true);
@@ -45,46 +38,49 @@ public class TestClient {
                         break;
                 }
             }
-
             Thread.Sleep(15);
         }
 
-        _netManager.Stop();
+        _client.Disconnect();
         Console.WriteLine("Client stopped.");
     }
 
     private static void ConnectToServer() {
-        if (_server?.ConnectionState == ConnectionState.Connected) {
+        if (_client?.IsConnected == true) {
             Console.WriteLine("Already connected to server!");
             return;
         }
 
-        NetDataWriter connectData = new();
-        connectData.Put("default_key1");
-        _server = _netManager?.Connect("127.0.0.1", 7777, connectData);
+        _client?.Connect("127.0.0.1", 7777, "key");
         Console.WriteLine("Attempting to connect to server...");
     }
 
     private static void DisconnectFromServer() {
-        if (_server?.ConnectionState == ConnectionState.Connected) {
-            _server.Disconnect();
+        if (_client?.IsConnected == true) {
+            _client.Disconnect();
             Console.WriteLine("Disconnecting from server...");
         } else {
             Console.WriteLine("Not connected to server!");
         }
     }
 
-    private static void OnConnected(NetPeer peer) {
-        Console.WriteLine($"Connected to server: {peer.Address}:{peer.Port}");
-    }
-
-    private static void OnDisconnected(NetPeer peer, DisconnectInfo disconnectInfo) {
-        Console.WriteLine($"Disconnected: {disconnectInfo.Reason}");
-        _server = null;
-    }
-
-    private static void OnMessageReceived(NetPeer peer, NetPacketReader reader, byte channel, DeliveryMethod deliveryMethod) {
-        Console.WriteLine($"Received message from server (bytes: {reader.AvailableBytes})");
-        reader.Recycle();
+    private static void OnClientEvent(PeerEvent eventType, NetPeer? peer, object? data) {
+        switch (eventType) {
+            case PeerEvent.Connected:
+                Console.WriteLine($"Connected to server: {peer?.Address}:{peer?.Port}");
+                break;
+            case PeerEvent.Disconnected:
+                var disconnectInfo = (DisconnectInfo?)data;
+                Console.WriteLine($"Disconnected: {disconnectInfo?.Reason}");
+                break;
+            case PeerEvent.MessageReceived:
+                var messageData = (byte[]?)data;
+                Console.WriteLine($"Received message from server (bytes: {messageData?.Length})");
+                break;
+            case PeerEvent.NetworkError:
+                var exception = (Exception?)data;
+                Console.WriteLine($"Network error: {exception?.Message}");
+                break;
+        }
     }
 }
