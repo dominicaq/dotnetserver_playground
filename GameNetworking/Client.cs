@@ -52,23 +52,30 @@ public class Client {
         try {
             MyPublicEndpoint = await DiscoverPublicEndpoint();
 
-            ClientEvent?.Invoke(PeerEvent.NetworkInfo, null,
-                $"Connecting to {serverEndpoint}...");
+            ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Connecting to {serverEndpoint}...");
 
             var parts = serverEndpoint.Split(':');
             if (parts.Length != 2) {
-                throw new ArgumentException("Invalid endpoint format. Expected: IP:PORT");
+                ClientEvent?.Invoke(PeerEvent.NetworkError, null,
+                    "Invalid endpoint format. Expected: IP:PORT");
+                lock (_connectionLock) { IsConnecting = false; }
+                return;
             }
 
-            var serverIP = parts[0];
+            var serverIP = IPAddress.Parse(parts[0]);
             var serverPort = int.Parse(parts[1]);
-            var remoteEndPoint = new IPEndPoint(IPAddress.Parse(serverIP), serverPort);
+            var remoteEndPoint = new IPEndPoint(serverIP, serverPort);
 
-            await StartHolePunching(remoteEndPoint);
-        } catch (Exception ex) {
-            lock (_connectionLock) {
-                IsConnecting = false;
+            if (NetworkUtils.IsLanIP(serverIP)) {
+                // LAN connection — skip NAT punchthrough
+                ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, "Detected LAN IP — connecting directly...");
+                _serverPeer = _netManager!.Connect(remoteEndPoint, "");
+            } else {
+                // External IP — use hole punching
+                await StartHolePunching(remoteEndPoint);
             }
+        } catch (Exception ex) {
+            lock (_connectionLock) { IsConnecting = false; }
             ClientEvent?.Invoke(PeerEvent.NetworkError, null, $"Connection failed: {ex.Message}");
         }
     }

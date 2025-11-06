@@ -6,7 +6,9 @@ A .NET 9.0 game server/client abstraction built with LiteNetLib.
 ./export-dll.sh
 ```
 
-## Test Bench Quickstart (automatically builds .dll)
+## Test Bench Quickstart
+*Note: Automatically builds and places the .dll*
+
 ```bash
 cd TestBench
 
@@ -17,14 +19,22 @@ dotnet run
 dotnet run client
 ```
 
-When starting client, you have to type the server code. Here's the special cases.
-`8473` is the default port.
+### Connecting the Client
+When launching the client, enter the server address provided.
+
+Here's the special cases:
 ```bash
 # Same machine
 127.0.0.1:8473
 
-# Different machine, same router
+# Different machine (same router / LAN)
 192.168.x.x:8473
+```
+*Note: The default port is `8473`*
+
+To find your machine’s local IP (for LAN testing), run:
+```bash
+ip addr show
 ```
 
 Edit `server_config.json` to configure.
