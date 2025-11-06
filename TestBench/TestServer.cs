@@ -1,24 +1,18 @@
 using GameNetworking;
 using LiteNetLib;
+using LiteNetLib.Utils;
 
 namespace TestBench;
 
 public class TestServer {
     public static async Task Run(string[] args) {
-        Console.WriteLine("Starting Game Server Test Host...");
-
         ServerConfig config = ServerConfig.LoadFromFile("server_config.json");
-
         Server server = new(config);
         server.ServerEvent += OnServerEvent;
+
         await server.Start();
 
-        Console.WriteLine("\n=== Connection Information ===");
-        Console.WriteLine($"Local IP: {server.LocalIP}");
-        Console.WriteLine($"Public IP: {server.PublicIP}");
-        Console.WriteLine($"Port: {config.ServerPort}");
-        Console.WriteLine("==============================\n");
-        Console.WriteLine("Press 'q' to quit, 's' to show server info");
+        Console.WriteLine("Controls: 'q' = quit | 'b' = broadcast test message");
 
         bool running = true;
         while (running) {
@@ -28,19 +22,31 @@ public class TestServer {
                 case 'Q':
                     running = false;
                     break;
-                case 's':
-                case 'S':
-                    ShowServerInfo(server);
+                case 'b':
+                case 'B':
+                    BroadcastTestMessage(server);
                     break;
             }
         }
 
         await server.Stop();
-        Console.WriteLine("Server shutdown complete.");
+    }
+
+    private static void BroadcastTestMessage(Server server) {
+        if (server.GetConnectedPeerCount() == 0) {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        writer.Put("Hello from server!");
+        server.BroadcastToAll(writer);
+
+        string timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
+        Console.WriteLine($"[{timestamp}] Broadcasted to {server.GetConnectedPeerCount()} client(s)");
     }
 
     private static void OnServerEvent(PeerEvent eventType, NetPeer? peer, object? data) {
-        string timestamp = DateTime.Now.ToString("HH:mm:ss");
+        string timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
         string peerInfo = peer != null ? $"[{peer.Address}:{peer.Port}]" : "[SERVER]";
 
         ConsoleColor originalColor = Console.ForegroundColor;
@@ -53,21 +59,21 @@ public class TestServer {
             _ => ConsoleColor.White
         };
 
-        string message = data?.ToString() ?? "No data";
-        Console.WriteLine($"[{timestamp}] {eventType} {peerInfo}: {message}");
+        switch (eventType) {
+            case PeerEvent.MessageReceived:
+                var messageData = (byte[]?)data;
+                if (messageData != null && messageData.Length > 0) {
+                    var reader = new NetDataReader(messageData);
+                    var msg = reader.GetString();
+                    Console.WriteLine($"[{timestamp}] {eventType} {peerInfo}: {msg}");
+                }
+                break;
+            default:
+                string message = data?.ToString() ?? "No data";
+                Console.WriteLine($"[{timestamp}] {eventType} {peerInfo}: {message}");
+                break;
+        }
 
         Console.ForegroundColor = originalColor;
-    }
-
-    private static void ShowServerInfo(Server server) {
-        Console.WriteLine("\n=== Server Info ===");
-        Console.WriteLine($"Server Name: {server.Config.ServerName}");
-        Console.WriteLine($"Port: {server.Config.ServerPort}");
-        Console.WriteLine($"Max Players: {server.Config.ServerMaxPlayers}");
-        Console.WriteLine($"Connected Players: {server.GetConnectedPeerCount()}");
-        Console.WriteLine($"Tick Rate: {server.Config.NetworkTickRate}");
-        Console.WriteLine($"Game Mode: {server.Config.ServerGameMode}");
-        Console.WriteLine($"Allow Cheats: {server.Config.ServerAllowCheats}");
-        Console.WriteLine("===================\n");
     }
 }

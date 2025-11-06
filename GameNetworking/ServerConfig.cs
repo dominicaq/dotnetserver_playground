@@ -16,7 +16,6 @@ public class ServerConfig {
     // Server settings
     public string ServerName { get; set; } = "default_name";
     public int ServerPort { get; set; } = 7777;
-    public string ServerConnectionKey { get; set; } = "default_key";
     public int ServerMaxPlayers { get; set; } = 10;
     public int ServerGameMode { get; set; } = 0;
     public bool ServerAllowCheats { get; set; } = false;

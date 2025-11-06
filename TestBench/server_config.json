@@ -1,7 +1,6 @@
 {
   "serverName": "Game Server",
   "serverPort": 8473,
-  "serverConnectionKey": "key",
   "serverMaxPlayers": 12,
   "serverGameMode": 0,
   "serverAllowCheats": false,

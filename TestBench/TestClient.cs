@@ -1,54 +1,42 @@
 using GameNetworking;
 using LiteNetLib;
+using LiteNetLib.Utils;
 
 namespace TestBench;
 
 public class TestClient {
     private static Client? _client;
-    private static string _serverAddress = "127.0.0.1";
-    private static int _serverPort = 7777;
-    private static string _connectionKey = "key";
 
-    public static void Run(string[] args) {
-        Console.WriteLine("Starting Test Client...");
-
-        // Parse command line arguments: dotnet run client <address> <port> <key>
-        if (args.Length > 1) { _serverAddress = args[1]; }
-        if (args.Length > 2) { _ = int.TryParse(args[2], out _serverPort); }
-        if (args.Length > 3) { _connectionKey = args[3]; }
-
-        Console.WriteLine($"Target server: {_serverAddress}:{_serverPort}");
-
+    public static async Task Run(string[] args) {
         _client = new Client();
         _client.Init();
         _client.ClientEvent += OnClientEvent;
 
-        ConnectToServer();
+        Console.Write("Enter server endpoint (IP:PORT): ");
+        string? endpoint = Console.ReadLine();
 
-        Console.WriteLine("Press 'r' to reconnect, 'd' to disconnect, 'n' for NAT punch, 'q' to quit");
+        if (string.IsNullOrWhiteSpace(endpoint)) {
+            return;
+        }
+
+        await _client.Connect(endpoint);
+
+        Console.WriteLine("Controls: 'q' = quit | 's' = send test message");
 
         bool running = true;
         while (running) {
             _client.Update();
 
             if (Console.KeyAvailable) {
-                ConsoleKeyInfo key = Console.ReadKey(true);
+                var key = Console.ReadKey(true);
                 switch (key.KeyChar) {
                     case 'q':
                     case 'Q':
                         running = false;
                         break;
-                    case 'r':
-                    case 'R':
-                        ConnectToServer();
-                        break;
-                    case 'd':
-                    case 'D':
-                        DisconnectFromServer();
-                        break;
-                    case 'n':
-                    case 'N':
-                        ConnectThroughNAT();
+                    case 's':
+                    case 'S':
+                        SendTestMessage();
                         break;
                 }
             }
@@ -57,77 +45,44 @@ public class TestClient {
         }
 
         _client.Disconnect();
-        Console.WriteLine("Client stopped.");
     }
 
-    private static void ConnectToServer() {
-        if (_client?.IsConnected == true) {
-            Console.WriteLine("Already connected to server!");
+    private static void SendTestMessage() {
+        if (_client?.IsConnected != true) {
             return;
         }
 
-        _client?.Connect(_serverAddress, _serverPort, _connectionKey);
-        Console.WriteLine($"Attempting to connect to {_serverAddress}:{_serverPort}...");
-    }
+        var writer = new NetDataWriter();
+        writer.Put("Hello from client!");
+        _client.SendToServer(writer);
 
-    private static void ConnectThroughNAT() {
-        if (_client == null) {
-            Console.WriteLine("Client not initialized!");
-            return;
-        }
-
-        Console.Write($"Enter facilitator address (default: {_serverAddress}): ");
-        string? facilitatorAddress = Console.ReadLine();
-        if (string.IsNullOrWhiteSpace(facilitatorAddress)) {
-            facilitatorAddress = _serverAddress;
-        }
-
-        Console.Write($"Enter facilitator port (default: {_serverPort}): ");
-        string? portInput = Console.ReadLine();
-        int facilitatorPort = int.TryParse(portInput, out int port) ? port : _serverPort;
-
-        Console.Write("Enter target player token: ");
-        string? token = Console.ReadLine();
-
-        if (string.IsNullOrWhiteSpace(token)) {
-            Console.WriteLine("Token cannot be empty!");
-            return;
-        }
-
-        // _client.ConnectThroughNAT(facilitatorAddress, facilitatorPort, token);
-        Console.WriteLine($"NAT punch request sent to {facilitatorAddress}:{facilitatorPort} for token: {token}");
-    }
-
-    private static void DisconnectFromServer() {
-        if (_client?.IsConnected == true) {
-            _client.Disconnect();
-            Console.WriteLine("Disconnecting from server...");
-        } else {
-            Console.WriteLine("Not connected to server!");
-        }
+        string timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
+        Console.WriteLine($"[{timestamp}] Sent message to server");
     }
 
     private static void OnClientEvent(PeerEvent eventType, NetPeer? peer, object? data) {
-        string timestamp = DateTime.Now.ToString("HH:mm:ss");
+        string timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
 
         switch (eventType) {
             case PeerEvent.Connected:
-                Console.WriteLine($"[{timestamp}] Connected to server: {peer?.Address}:{peer?.Port}");
+                Console.WriteLine($"[{timestamp}] Connected to server");
                 break;
             case PeerEvent.Disconnected:
-                var disconnectInfo = (DisconnectInfo?)data;
-                Console.WriteLine($"[{timestamp}] Disconnected: {disconnectInfo?.Reason}");
+                Console.WriteLine($"[{timestamp}] Disconnected from server");
                 break;
             case PeerEvent.MessageReceived:
                 var messageData = (byte[]?)data;
-                Console.WriteLine($"[{timestamp}] Received message from server (bytes: {messageData?.Length})");
+                if (messageData != null && messageData.Length > 0) {
+                    var reader = new NetDataReader(messageData);
+                    var message = reader.GetString();
+                    Console.WriteLine($"[{timestamp}] Received: {message}");
+                }
                 break;
             case PeerEvent.NetworkError:
-                var exception = (Exception?)data;
-                Console.WriteLine($"[{timestamp}] Network error: {exception?.Message}");
+                Console.WriteLine($"[{timestamp}] ERROR: {data}");
                 break;
             case PeerEvent.NetworkInfo:
-                Console.WriteLine($"[{timestamp}] Network info: {data}");
+                Console.WriteLine($"[{timestamp}] {data}");
                 break;
         }
     }

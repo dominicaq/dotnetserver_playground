@@ -11,6 +11,7 @@ public class Server(ServerConfig config) {
     public bool IsRunning { get; private set; }
     public string LocalIP { get; private set; } = "127.0.0.1";
     public string PublicIP { get; private set; } = "Unknown";
+    public string ShareableCode { get; private set; } = "Unknown";
 
     private int _tickInterval;
     private readonly Lock _runningLock = new();
@@ -36,7 +37,8 @@ public class Server(ServerConfig config) {
             _listener.NetworkReceiveUnconnectedEvent += OnUnconnectedMessageReceived;
 
             _netManager = new NetManager(_listener) {
-                NatPunchEnabled = false
+                NatPunchEnabled = false,
+                UnconnectedMessagesEnabled = true
             };
 
             _netManager.Start(Config.ServerPort);
@@ -50,10 +52,16 @@ public class Server(ServerConfig config) {
 
         LocalIP = NetworkUtils.GetLocalIPAddress();
         PublicIP = await NetworkUtils.GetPublicIPAddress();
+        ShareableCode = $"{PublicIP}:{Config.ServerPort}";
 
         if (Config.NetworkEnableUPnP) {
             await SetupUPnP();
         }
+
+        ServerEvent?.Invoke(PeerEvent.NetworkInfo, null,
+            $"\n===========================================\n" +
+            $"SERVER READY - Share this code: {ShareableCode}\n" +
+            $"===========================================");
     }
 
     private void ServerLoop() {
@@ -102,9 +110,24 @@ public class Server(ServerConfig config) {
 
     private void OnUnconnectedMessageReceived(IPEndPoint remoteEndPoint, NetPacketReader reader, UnconnectedMessageType messageType) {
         try {
-            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Unconnected message from {remoteEndPoint}");
+            if (reader.AvailableBytes > 0) {
+                var message = reader.GetString();
+
+                if (message == "PUNCH") {
+                    ServerEvent?.Invoke(PeerEvent.NetworkInfo, null,
+                        $"Received punch from {remoteEndPoint}, responding...");
+
+                    var writer = new NetDataWriter();
+                    writer.Put("PUNCH_ACK");
+                    _netManager!.SendUnconnectedMessage(writer, remoteEndPoint);
+                } else {
+                    ServerEvent?.Invoke(PeerEvent.NetworkInfo, null,
+                        $"Unconnected message from {remoteEndPoint}");
+                }
+            }
         } catch (Exception ex) {
-            ServerEvent?.Invoke(PeerEvent.NetworkError, null, $"Unconnected message error: {ex.Message}");
+            ServerEvent?.Invoke(PeerEvent.NetworkError, null,
+                $"Unconnected message error: {ex.Message}");
         } finally {
             reader.Recycle();
         }
@@ -116,12 +139,8 @@ public class Server(ServerConfig config) {
             return;
         }
 
-        string connectionKey = request.Data?.GetString() ?? string.Empty;
-        if (connectionKey.Equals(Config.ServerConnectionKey)) {
-            request.Accept();
-        } else {
-            request.Reject();
-        }
+        // TODO: a ban list maybe
+        request.Accept();
     }
 
     private void OnPlayerJoined(NetPeer peer) {
@@ -145,6 +164,16 @@ public class Server(ServerConfig config) {
     public void BroadcastToAll(NetDataWriter writer, DeliveryMethod method = DeliveryMethod.ReliableOrdered) {
         if (!ValidateServer()) { return; }
         _netManager!.SendToAll(writer, method);
+    }
+
+    public void BroadcastToAllExcept(NetPeer excludePeer, NetDataWriter writer, DeliveryMethod method = DeliveryMethod.ReliableOrdered) {
+        if (!ValidateServer()) { return; }
+
+        foreach (var peer in _netManager!.ConnectedPeerList) {
+            if (peer != excludePeer) {
+                peer.Send(writer, method);
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
