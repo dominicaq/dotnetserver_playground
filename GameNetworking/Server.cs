@@ -243,6 +243,14 @@ public class Server(ServerConfig config) {
                 "Game Server"
             );
 
+            try {
+                ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Cleaning up any existing port mapping for UDP {Config.ServerPort}...");
+                await _natDevice.DeletePortMapAsync(_portMapping);
+                ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, "Removed stale mapping");
+            } catch {
+                // Ignore if mapping doesn't exist
+            }
+
             ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Creating port mapping for UDP {Config.ServerPort}...");
             await _natDevice.CreatePortMapAsync(_portMapping);
 

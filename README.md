@@ -20,10 +20,12 @@ dotnet run client
 ```
 
 ### Connecting the Client
-When launching the client, enter the server code provided to connect.
+When launching the client, enter the server code to connect. The client
+automatically detects whether you're connecting from the same machine,
+local network (LAN), or over the internet.
 
 *Note: The default port is `8473`, if that port is already mapped you need to
-server config.*
+edit the server config.*
 
 
 Edit `server_config.json` to configure.
