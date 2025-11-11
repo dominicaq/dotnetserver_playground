@@ -22,7 +22,7 @@ public class Client {
 
         _netManager = new NetManager(_listener) {
             UnconnectedMessagesEnabled = true,
-            NatPunchEnabled = false
+            NatPunchEnabled = true
         };
 
         _listener.PeerConnectedEvent += OnConnectedToServer;
@@ -33,8 +33,7 @@ public class Client {
 
         _netManager.Start();
 
-        ClientEvent?.Invoke(PeerEvent.NetworkInfo, null,
-            $"Client initialized on local port {_netManager.LocalPort}");
+        ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Client initialized on local port {_netManager.LocalPort}");
     }
 
     // -------------------------------------------------------------------------
@@ -67,11 +66,9 @@ public class Client {
             var remoteEndPoint = new IPEndPoint(serverIP, serverPort);
 
             if (NetworkUtils.IsLanIP(serverIP)) {
-                // LAN connection — skip NAT punchthrough
                 ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, "Detected LAN IP — connecting directly...");
                 _serverPeer = _netManager!.Connect(remoteEndPoint, "");
             } else {
-                // External IP — use hole punching
                 await StartHolePunching(remoteEndPoint);
             }
         } catch (Exception ex) {
@@ -84,47 +81,6 @@ public class Client {
         var localPort = _netManager!.LocalPort;
         var publicIP = await NetworkUtils.GetPublicIPAddress();
         return $"{publicIP}:{localPort}";
-    }
-
-    private async Task StartHolePunching(IPEndPoint serverEndPoint) {
-        _punchCts = new CancellationTokenSource();
-
-        ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, "Starting hole punch...");
-
-        // Start connection attempt early
-        var connectionAttempted = false;
-
-        try {
-            for (int i = 0; i < 100 && !_punchCts.Token.IsCancellationRequested && _serverPeer == null; i++) {
-                var writer = new NetDataWriter();
-                writer.Put("PUNCH");
-
-                _netManager!.SendUnconnectedMessage(writer, serverEndPoint);
-
-                // ADDED: Try to connect after receiving first punch ack (around attempt 3-5)
-                if (i >= 3 && !connectionAttempted) {
-                    ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, "Attempting connection...");
-                    _netManager.Connect(serverEndPoint, "");
-                    connectionAttempted = true;
-                }
-
-                if (i % 10 == 0) {
-                    ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Punch attempt {i}/100...");
-                }
-
-                _netManager.PollEvents();
-
-                await Task.Delay(100, _punchCts.Token);
-            }
-
-            // Fallback: try to connect if we somehow didn't already
-            if (!connectionAttempted && !_punchCts.Token.IsCancellationRequested && _serverPeer == null) {
-                ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, "Attempting connection...");
-                _netManager!.Connect(serverEndPoint, "");
-            }
-        } catch (OperationCanceledException) {
-            ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, "Hole punching stopped");
-        }
     }
 
     public void Update() => _netManager?.PollEvents();
@@ -140,6 +96,48 @@ public class Client {
             _punchCts?.Cancel();
             _serverPeer?.Disconnect();
             _serverPeer = null;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // NAT Hole Punching
+    // -------------------------------------------------------------------------
+    private async Task StartHolePunching(IPEndPoint serverEndPoint) {
+        _punchCts = new CancellationTokenSource();
+        ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, "Starting hole punch...");
+
+        try {
+            for (int i = 0; i < 100 && !_punchCts.Token.IsCancellationRequested && _serverPeer == null; i++) {
+                // Send punch packet
+                var writer = new NetDataWriter();
+                writer.Put("PUNCH");
+                _netManager!.SendUnconnectedMessage(writer, serverEndPoint);
+
+                if (i % 10 == 0) {
+                    ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Punch attempt {i}/100...");
+                }
+
+                _netManager.PollEvents();
+                await Task.Delay(100, _punchCts.Token);
+            }
+
+            // If hole punching loop exits without connection, it failed
+            if (_serverPeer == null && !_punchCts.Token.IsCancellationRequested) {
+                ClientEvent?.Invoke(PeerEvent.NetworkError, null, "Hole punch timeout - connection failed");
+                lock (_connectionLock) { IsConnecting = false; }
+            }
+        } catch (OperationCanceledException) {
+            ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, "Hole punching stopped");
+        }
+    }
+
+    private void HandlePunchAck(IPEndPoint remoteEndPoint) {
+        ClientEvent?.Invoke(PeerEvent.NetworkInfo, null,
+            $"Received PUNCH_ACK from {remoteEndPoint} - attempting connection...");
+
+        // Only try to connect once when we get the first ACK
+        if (_serverPeer == null && IsConnecting) {
+            _netManager!.Connect(remoteEndPoint, "");
         }
     }
 
@@ -165,22 +163,17 @@ public class Client {
 
     private void OnUnconnectedMessageReceived(IPEndPoint remoteEndPoint, NetPacketReader reader, UnconnectedMessageType messageType) {
         try {
-            if (reader.AvailableBytes > 0) {
-                var message = reader.GetString();
+            if (reader.AvailableBytes == 0) {
+                return;
+            }
 
-                if (message == "PUNCH_ACK") {
-                    ClientEvent?.Invoke(PeerEvent.NetworkInfo, null,
-                        $"Received punch ack from {remoteEndPoint}");
+            var message = reader.GetString();
 
-                    if (_serverPeer == null && IsConnecting) {
-                        var writer = new NetDataWriter();
-                        writer.Put("");
-                        _netManager!.Connect(remoteEndPoint, writer);
-                    }
-                } else {
-                    ClientEvent?.Invoke(PeerEvent.NetworkInfo, null,
-                        $"Unconnected message from {remoteEndPoint}");
-                }
+            if (message == "PUNCH_ACK") {
+                HandlePunchAck(remoteEndPoint);
+            } else {
+                ClientEvent?.Invoke(PeerEvent.NetworkInfo, null,
+                    $"Unconnected message from {remoteEndPoint}: {message}");
             }
         } catch (Exception ex) {
             ClientEvent?.Invoke(PeerEvent.NetworkError, null,

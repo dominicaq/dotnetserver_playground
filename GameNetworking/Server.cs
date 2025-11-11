@@ -37,8 +37,8 @@ public class Server(ServerConfig config) {
             _listener.NetworkReceiveUnconnectedEvent += OnUnconnectedMessageReceived;
 
             _netManager = new NetManager(_listener) {
-                NatPunchEnabled = false,
-                UnconnectedMessagesEnabled = true
+                UnconnectedMessagesEnabled = true,
+                NatPunchEnabled = false  // Server doesn't need this, just clients do
             };
 
             _netManager.Start(Config.ServerPort);
@@ -110,20 +110,17 @@ public class Server(ServerConfig config) {
 
     private void OnUnconnectedMessageReceived(IPEndPoint remoteEndPoint, NetPacketReader reader, UnconnectedMessageType messageType) {
         try {
-            if (reader.AvailableBytes > 0) {
-                var message = reader.GetString();
+            if (reader.AvailableBytes == 0) {
+                return;
+            }
 
-                if (message == "PUNCH") {
-                    ServerEvent?.Invoke(PeerEvent.NetworkInfo, null,
-                        $"Received punch from {remoteEndPoint}, responding...");
+            var message = reader.GetString();
 
-                    var writer = new NetDataWriter();
-                    writer.Put("PUNCH_ACK");
-                    _netManager!.SendUnconnectedMessage(writer, remoteEndPoint);
-                } else {
-                    ServerEvent?.Invoke(PeerEvent.NetworkInfo, null,
-                        $"Unconnected message from {remoteEndPoint}");
-                }
+            if (message == "PUNCH") {
+                HandleHolePunch(remoteEndPoint);
+            } else {
+                ServerEvent?.Invoke(PeerEvent.NetworkInfo, null,
+                    $"Unconnected message from {remoteEndPoint}: {message}");
             }
         } catch (Exception ex) {
             ServerEvent?.Invoke(PeerEvent.NetworkError, null,
@@ -152,6 +149,17 @@ public class Server(ServerConfig config) {
     }
 
     private void OnPlayerLeft(NetPeer peer, DisconnectInfo info) => ServerEvent?.Invoke(PeerEvent.Disconnected, peer, info);
+
+    // -------------------------------------------------------------------------
+    // NAT Hole Punching
+    // -------------------------------------------------------------------------
+    private void HandleHolePunch(IPEndPoint remoteEndPoint) {
+        ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Received hole punch from {remoteEndPoint}, sending ACK...");
+
+        var writer = new NetDataWriter();
+        writer.Put("PUNCH_ACK");
+        _netManager!.SendUnconnectedMessage(writer, remoteEndPoint);
+    }
 
     // -------------------------------------------------------------------------
     // Data sending
