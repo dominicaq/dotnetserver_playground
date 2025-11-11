@@ -20,21 +20,10 @@ dotnet run client
 ```
 
 ### Connecting the Client
-When launching the client, enter the server address provided.
+When launching the client, enter the server code provided to connect.
 
-Here's the special cases:
-```bash
-# Same machine
-127.0.0.1:8473
+*Note: The default port is `8473`, if that port is already mapped you need to
+server config.*
 
-# Different machine (same router / LAN)
-192.168.x.x:8473
-```
-*Note: The default port is `8473`*
-
-To find your machine’s local IP (for LAN testing), run:
-```bash
-ip addr show
-```
 
 Edit `server_config.json` to configure.

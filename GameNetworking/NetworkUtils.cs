@@ -137,7 +137,7 @@ public static class NetworkUtils {
         if (IPAddress.TryParse(internetIP, out var serverPublicIP)) {
             var connectionType = DetectConnectionType(serverPublicIP, localIP, publicIP);
 
-            if (connectionType == ConnectionType.LAN || connectionType == ConnectionType.Localhost) {
+            if (connectionType != ConnectionType.Internet) {
                 return $"{lanIP}:{port}";
             }
         }
