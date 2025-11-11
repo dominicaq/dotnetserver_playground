@@ -38,7 +38,7 @@ public class Server(ServerConfig config) {
 
             _netManager = new NetManager(_listener) {
                 UnconnectedMessagesEnabled = true,
-                NatPunchEnabled = false  // Server doesn't need this, just clients do
+                NatPunchEnabled = false
             };
 
             _netManager.Start(Config.ServerPort);
@@ -52,7 +52,9 @@ public class Server(ServerConfig config) {
 
         LocalIP = NetworkUtils.GetLocalIPAddress();
         PublicIP = await NetworkUtils.GetPublicIPAddress();
-        ShareableCode = $"{PublicIP}:{Config.ServerPort}";
+
+        var plainCode = $"{Config.ServerPort}|{LocalIP}|{PublicIP}";
+        ShareableCode = NetworkUtils.EncryptServerCode(plainCode);
 
         if (Config.NetworkEnableUPnP) {
             await SetupUPnP();
@@ -60,7 +62,11 @@ public class Server(ServerConfig config) {
 
         ServerEvent?.Invoke(PeerEvent.NetworkInfo, null,
             $"\n===========================================\n" +
-            $"SERVER READY - Share this code: {ShareableCode}\n" +
+            $"SERVER READY\n" +
+            $"Localhost: 127.0.0.1:{Config.ServerPort}\n" +
+            $"LAN:       {LocalIP}:{Config.ServerPort}\n" +
+            $"Internet:  {PublicIP}:{Config.ServerPort}\n" +
+            $"Code:      {ShareableCode}\n" +
             $"===========================================");
     }
 

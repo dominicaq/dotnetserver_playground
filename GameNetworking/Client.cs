@@ -9,13 +9,13 @@ public class Client {
     public event Action<PeerEvent, NetPeer?, object?>? ClientEvent;
     public bool IsConnected { get; private set; }
     public bool IsConnecting { get; private set; }
-    public string? MyPublicEndpoint { get; private set; }
+    public string? PublicEndpoint { get; private set; }
 
     private readonly Lock _connectionLock = new();
     private EventBasedNetListener? _listener;
     private NetManager? _netManager;
     private NetPeer? _serverPeer;
-    private CancellationTokenSource? _punchCts;
+    private CancellationTokenSource? _connectionCts;
 
     public void Init() {
         _listener = new EventBasedNetListener();
@@ -39,7 +39,7 @@ public class Client {
     // -------------------------------------------------------------------------
     // Connection
     // -------------------------------------------------------------------------
-    public async Task Connect(string serverEndpoint) {
+    public async Task Connect(string serverCode) {
         lock (_connectionLock) {
             if (IsConnected || IsConnecting) {
                 ClientEvent?.Invoke(PeerEvent.NetworkError, null, "Already connected or connecting");
@@ -49,27 +49,34 @@ public class Client {
         }
 
         try {
-            MyPublicEndpoint = await DiscoverPublicEndpoint();
+            PublicEndpoint = await DiscoverPublicEndpoint();
 
-            ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Connecting to {serverEndpoint}...");
+            string selectedEndpoint = await NetworkUtils.SelectBestEndpoint(serverCode);
+            ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Connecting to {selectedEndpoint}...");
 
-            var parts = serverEndpoint.Split(':');
-            if (parts.Length != 2) {
-                ClientEvent?.Invoke(PeerEvent.NetworkError, null,
-                    "Invalid endpoint format. Expected: IP:PORT");
+            var parts = selectedEndpoint.Split(':');
+            if (parts.Length != 2 || !IPAddress.TryParse(parts[0], out var serverIP) || !int.TryParse(parts[1], out var serverPort)) {
+                ClientEvent?.Invoke(PeerEvent.NetworkError, null, "Invalid endpoint format");
                 lock (_connectionLock) { IsConnecting = false; }
                 return;
             }
 
-            var serverIP = IPAddress.Parse(parts[0]);
-            var serverPort = int.Parse(parts[1]);
             var remoteEndPoint = new IPEndPoint(serverIP, serverPort);
 
-            if (NetworkUtils.IsLanIP(serverIP)) {
-                ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, "Detected LAN IP — connecting directly...");
-                _serverPeer = _netManager!.Connect(remoteEndPoint, "");
-            } else {
-                await StartHolePunching(remoteEndPoint);
+            if (_netManager == null) {
+                ClientEvent?.Invoke(PeerEvent.NetworkError, null, "NetManager not initialized");
+                lock (_connectionLock) { IsConnecting = false; }
+                return;
+            }
+
+            _connectionCts = new CancellationTokenSource();
+            _netManager.Connect(remoteEndPoint, "");
+
+            await WaitForConnection(10000);
+
+            if (!IsConnected && IsConnecting) {
+                lock (_connectionLock) { IsConnecting = false; }
+                ClientEvent?.Invoke(PeerEvent.NetworkError, null, "Connection timeout");
             }
         } catch (Exception ex) {
             lock (_connectionLock) { IsConnecting = false; }
@@ -77,8 +84,35 @@ public class Client {
         }
     }
 
+    private async Task WaitForConnection(int timeoutMs) {
+        if (_connectionCts == null) {
+            return;
+        }
+
+        var startTime = DateTime.UtcNow;
+
+        try {
+            while (IsConnecting && !IsConnected &&
+                   (DateTime.UtcNow - startTime).TotalMilliseconds < timeoutMs &&
+                   !_connectionCts.Token.IsCancellationRequested) {
+                _netManager?.PollEvents();
+                await Task.Delay(100, _connectionCts.Token);
+            }
+
+            if (!IsConnected && IsConnecting && !_connectionCts.Token.IsCancellationRequested) {
+                ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, "Connection attempt timed out");
+            }
+        } catch (OperationCanceledException) {
+            // ignore
+        }
+    }
+
     private async Task<string> DiscoverPublicEndpoint() {
-        var localPort = _netManager!.LocalPort;
+        if (_netManager == null) {
+            return "Unknown";
+        }
+
+        var localPort = _netManager.LocalPort;
         var publicIP = await NetworkUtils.GetPublicIPAddress();
         return $"{publicIP}:{localPort}";
     }
@@ -93,51 +127,9 @@ public class Client {
 
             IsConnected = false;
             IsConnecting = false;
-            _punchCts?.Cancel();
+            _connectionCts?.Cancel();
             _serverPeer?.Disconnect();
             _serverPeer = null;
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // NAT Hole Punching
-    // -------------------------------------------------------------------------
-    private async Task StartHolePunching(IPEndPoint serverEndPoint) {
-        _punchCts = new CancellationTokenSource();
-        ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, "Starting hole punch...");
-
-        try {
-            for (int i = 0; i < 100 && !_punchCts.Token.IsCancellationRequested && _serverPeer == null; i++) {
-                // Send punch packet
-                var writer = new NetDataWriter();
-                writer.Put("PUNCH");
-                _netManager!.SendUnconnectedMessage(writer, serverEndPoint);
-
-                if (i % 10 == 0) {
-                    ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Punch attempt {i}/100...");
-                }
-
-                _netManager.PollEvents();
-                await Task.Delay(100, _punchCts.Token);
-            }
-
-            // If hole punching loop exits without connection, it failed
-            if (_serverPeer == null && !_punchCts.Token.IsCancellationRequested) {
-                ClientEvent?.Invoke(PeerEvent.NetworkError, null, "Hole punch timeout - connection failed");
-                lock (_connectionLock) { IsConnecting = false; }
-            }
-        } catch (OperationCanceledException) {
-            ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, "Hole punching stopped");
-        }
-    }
-
-    private void HandlePunchAck(IPEndPoint remoteEndPoint) {
-        ClientEvent?.Invoke(PeerEvent.NetworkInfo, null,
-            $"Received PUNCH_ACK from {remoteEndPoint} - attempting connection...");
-
-        // Only try to connect once when we get the first ACK
-        if (_serverPeer == null && IsConnecting) {
-            _netManager!.Connect(remoteEndPoint, "");
         }
     }
 
@@ -168,13 +160,8 @@ public class Client {
             }
 
             var message = reader.GetString();
-
-            if (message == "PUNCH_ACK") {
-                HandlePunchAck(remoteEndPoint);
-            } else {
-                ClientEvent?.Invoke(PeerEvent.NetworkInfo, null,
-                    $"Unconnected message from {remoteEndPoint}: {message}");
-            }
+            ClientEvent?.Invoke(PeerEvent.NetworkInfo, null,
+                $"Unconnected message from {remoteEndPoint}: {message}");
         } catch (Exception ex) {
             ClientEvent?.Invoke(PeerEvent.NetworkError, null,
                 $"Unconnected message error: {ex.Message}");
@@ -201,11 +188,10 @@ public class Client {
             _serverPeer = peer;
         }
 
-        _punchCts?.Cancel();
+        _connectionCts?.Cancel();
 
-        ClientEvent?.Invoke(PeerEvent.NetworkInfo, null,
+        ClientEvent?.Invoke(PeerEvent.Connected, null,
             $"Connected to server at {peer.Address}:{peer.Port}");
-        ClientEvent?.Invoke(PeerEvent.Connected, peer, null);
     }
 
     private void OnDisconnectedFromServer(NetPeer peer, DisconnectInfo info) {

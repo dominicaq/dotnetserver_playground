@@ -12,14 +12,14 @@ public class TestClient {
         _client.Init();
         _client.ClientEvent += OnClientEvent;
 
-        Console.Write("Enter server endpoint (IP:PORT): ");
-        string? endpoint = Console.ReadLine();
+        Console.Write("Enter server code: ");
+        string? serverCode = Console.ReadLine();
 
-        if (string.IsNullOrWhiteSpace(endpoint)) {
+        if (string.IsNullOrWhiteSpace(serverCode)) {
             return;
         }
 
-        await _client.Connect(endpoint);
+        await _client.Connect(serverCode);
 
         Console.WriteLine("Controls: 'q' = quit | 's' = send test message");
 
@@ -63,13 +63,25 @@ public class TestClient {
     private static void OnClientEvent(PeerEvent eventType, NetPeer? peer, object? data) {
         string timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
 
+        ConsoleColor originalColor = Console.ForegroundColor;
+        Console.ForegroundColor = eventType switch {
+            PeerEvent.Connected => ConsoleColor.Green,
+            PeerEvent.Disconnected => ConsoleColor.Yellow,
+            PeerEvent.NetworkError => ConsoleColor.Red,
+            PeerEvent.MessageReceived => ConsoleColor.Cyan,
+            PeerEvent.NetworkInfo => ConsoleColor.Blue,
+            _ => ConsoleColor.White
+        };
+
         switch (eventType) {
             case PeerEvent.Connected:
                 Console.WriteLine($"[{timestamp}] Connected to server");
                 break;
+
             case PeerEvent.Disconnected:
                 Console.WriteLine($"[{timestamp}] Disconnected from server");
                 break;
+
             case PeerEvent.MessageReceived:
                 var messageData = (byte[]?)data;
                 if (messageData != null && messageData.Length > 0) {
@@ -78,12 +90,16 @@ public class TestClient {
                     Console.WriteLine($"[{timestamp}] Received: {message}");
                 }
                 break;
+
             case PeerEvent.NetworkError:
-                Console.WriteLine($"[{timestamp}] ERROR: {data}");
+                Console.WriteLine($"[{timestamp}] {data}");
                 break;
+
             case PeerEvent.NetworkInfo:
                 Console.WriteLine($"[{timestamp}] {data}");
                 break;
         }
+
+        Console.ForegroundColor = originalColor;
     }
 }

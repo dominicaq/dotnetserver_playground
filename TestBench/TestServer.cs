@@ -5,6 +5,8 @@ using LiteNetLib.Utils;
 namespace TestBench;
 
 public class TestServer {
+    private static bool _running = true;
+
     public static async Task Run(string[] args) {
         ServerConfig config = ServerConfig.LoadFromFile("server_config.json");
         Server server = new(config);
@@ -14,19 +16,22 @@ public class TestServer {
 
         Console.WriteLine("Controls: 'q' = quit | 'b' = broadcast test message");
 
-        bool running = true;
-        while (running) {
-            ConsoleKeyInfo key = Console.ReadKey(true);
-            switch (key.KeyChar) {
-                case 'q':
-                case 'Q':
-                    running = false;
-                    break;
-                case 'b':
-                case 'B':
-                    BroadcastTestMessage(server);
-                    break;
+        while (_running) {
+            if (Console.KeyAvailable) {
+                ConsoleKeyInfo key = Console.ReadKey(true);
+                switch (key.KeyChar) {
+                    case 'q':
+                    case 'Q':
+                        _running = false;
+                        break;
+                    case 'b':
+                    case 'B':
+                        BroadcastTestMessage(server);
+                        break;
+                }
             }
+            // Prevent CPU spinning
+            await Task.Delay(100);
         }
 
         await server.Stop();
@@ -68,6 +73,16 @@ public class TestServer {
                     Console.WriteLine($"[{timestamp}] {eventType} {peerInfo}: {msg}");
                 }
                 break;
+
+            case PeerEvent.NetworkError:
+                string errorMessage = data?.ToString() ?? "Unknown error";
+                Console.WriteLine($"[{timestamp}] {eventType} {peerInfo}: {errorMessage}");
+                if (IsCriticalError(errorMessage)) {
+                    Console.WriteLine($"[{timestamp}] Critical error detected - shutting down server...");
+                    _running = false;
+                }
+                break;
+
             default:
                 string message = data?.ToString() ?? "No data";
                 Console.WriteLine($"[{timestamp}] {eventType} {peerInfo}: {message}");
@@ -75,5 +90,18 @@ public class TestServer {
         }
 
         Console.ForegroundColor = originalColor;
+    }
+
+    private static bool IsCriticalError(string errorMessage) {
+        // Define which errors should stop the server
+        string[] criticalErrors = [
+            "UPnP setup failed",
+            "Failed to start",
+            "Port already in use",
+            "Cannot bind to port"
+        ];
+
+        return criticalErrors.Any(error =>
+            errorMessage.Contains(error, StringComparison.OrdinalIgnoreCase));
     }
 }
