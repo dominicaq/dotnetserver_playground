@@ -37,8 +37,7 @@ public class Server(ServerConfig config) {
             _listener.NetworkReceiveUnconnectedEvent += OnUnconnectedMessageReceived;
 
             _netManager = new NetManager(_listener) {
-                UnconnectedMessagesEnabled = true,
-                NatPunchEnabled = false
+                UnconnectedMessagesEnabled = true
             };
 
             _netManager.Start(Config.ServerPort);
@@ -121,13 +120,8 @@ public class Server(ServerConfig config) {
             }
 
             var message = reader.GetString();
-
-            if (message == "PUNCH") {
-                HandleHolePunch(remoteEndPoint);
-            } else {
-                ServerEvent?.Invoke(PeerEvent.NetworkInfo, null,
-                    $"Unconnected message from {remoteEndPoint}: {message}");
-            }
+            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null,
+                $"Unconnected message from {remoteEndPoint}: {message}");
         } catch (Exception ex) {
             ServerEvent?.Invoke(PeerEvent.NetworkError, null,
                 $"Unconnected message error: {ex.Message}");
@@ -155,17 +149,6 @@ public class Server(ServerConfig config) {
     }
 
     private void OnPlayerLeft(NetPeer peer, DisconnectInfo info) => ServerEvent?.Invoke(PeerEvent.Disconnected, peer, info);
-
-    // -------------------------------------------------------------------------
-    // NAT Hole Punching
-    // -------------------------------------------------------------------------
-    private void HandleHolePunch(IPEndPoint remoteEndPoint) {
-        ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Received hole punch from {remoteEndPoint}, sending ACK...");
-
-        var writer = new NetDataWriter();
-        writer.Put("PUNCH_ACK");
-        _netManager!.SendUnconnectedMessage(writer, remoteEndPoint);
-    }
 
     // -------------------------------------------------------------------------
     // Data sending
@@ -219,7 +202,7 @@ public class Server(ServerConfig config) {
     }
 
     // -------------------------------------------------------------------------
-    // UPnP (optional fallback)
+    // UPnP (automatic port forwarding)
     // -------------------------------------------------------------------------
     private NatDevice? _natDevice;
     private Mapping? _portMapping;
@@ -246,7 +229,6 @@ public class Server(ServerConfig config) {
             try {
                 ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Cleaning up any existing port mapping for UDP {Config.ServerPort}...");
                 await _natDevice.DeletePortMapAsync(_portMapping);
-                ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, "Removed stale mapping");
             } catch {
                 // Ignore if mapping doesn't exist
             }
@@ -254,11 +236,11 @@ public class Server(ServerConfig config) {
             ServerEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Creating port mapping for UDP {Config.ServerPort}...");
             await _natDevice.CreatePortMapAsync(_portMapping);
 
-
-            ServerEvent?.Invoke(PeerEvent.NetworkInfo, null,
-                $"UPnP Success — Private IP: {LocalIP}:{Config.ServerPort}, Public IP: {PublicIP}:{Config.ServerPort}");
         } catch (Exception ex) {
-            ServerEvent?.Invoke(PeerEvent.NetworkError, null, $"UPnP setup failed: {ex.Message}");
+            ServerEvent?.Invoke(PeerEvent.NetworkError, null,
+                $"UPnP setup failed: {ex.Message}\n" +
+                $"Server is accessible on LAN but NOT from internet.\n" +
+                $"To enable internet play, manually forward UDP port {Config.ServerPort} on your router.");
         }
     }
 

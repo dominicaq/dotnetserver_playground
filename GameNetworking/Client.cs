@@ -9,16 +9,18 @@ public class Client {
     public event Action<PeerEvent, NetPeer?, object?>? ClientEvent;
     public bool IsConnected { get; private set; }
     public bool IsConnecting { get; private set; }
-    public string? PublicEndpoint { get; private set; }
 
     private readonly Lock _connectionLock = new();
     private EventBasedNetListener? _listener;
     private NetManager? _netManager;
     private NetPeer? _serverPeer;
     private CancellationTokenSource? _connectionCts;
+    private NatPunchModule? _natPunchModule;
+    private EventBasedNatPunchListener? _natListener;
 
     public void Init() {
         _listener = new EventBasedNetListener();
+        _natListener = new EventBasedNatPunchListener();
 
         _netManager = new NetManager(_listener) {
             UnconnectedMessagesEnabled = true,
@@ -31,7 +33,14 @@ public class Client {
         _listener.NetworkReceiveUnconnectedEvent += OnUnconnectedMessageReceived;
         _listener.ConnectionRequestEvent += OnConnectionRequest;
 
+        // Start client
         _netManager.Start();
+
+        _netManager.NatPunchModule.Init(_natListener);
+
+        // Subscribe to NAT events on the nat listener
+        _natListener.NatIntroductionSuccess += OnNatIntroductionSuccess;
+        _natListener.NatIntroductionRequest += OnNatIntroductionRequest;
 
         ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Client initialized on local port {_netManager.LocalPort}");
     }
@@ -55,8 +64,6 @@ public class Client {
                 return;
             }
 
-            PublicEndpoint = await DiscoverPublicEndpoint();
-
             string selectedEndpoint = await NetworkUtils.SelectBestEndpoint(serverCode);
             ClientEvent?.Invoke(PeerEvent.NetworkInfo, null, $"Connecting to {selectedEndpoint}...");
 
@@ -75,7 +82,16 @@ public class Client {
 
             if (!IsConnected && IsConnecting) {
                 lock (_connectionLock) { IsConnecting = false; }
-                ClientEvent?.Invoke(PeerEvent.NetworkError, null, "Connection timeout");
+
+                bool isLan = NetworkUtils.IsLanIP(serverIP);
+                if (isLan) {
+                    ClientEvent?.Invoke(PeerEvent.NetworkError, null, "Connection timeout");
+                } else {
+                    ClientEvent?.Invoke(PeerEvent.NetworkError, null,
+                        "Connection timeout. If connecting over the internet, ensure the server has:\n" +
+                        "1. UPnP enabled (Config.NetworkEnableUPnP = true), OR\n" +
+                        "2. Manual port forwarding configured on the router");
+                }
             }
         } catch (Exception ex) {
             lock (_connectionLock) { IsConnecting = false; }
@@ -104,16 +120,6 @@ public class Client {
         } catch (OperationCanceledException) {
             // ignore
         }
-    }
-
-    private async Task<string> DiscoverPublicEndpoint() {
-        if (_netManager == null) {
-            return "Unknown";
-        }
-
-        var localPort = _netManager.LocalPort;
-        var publicIP = await NetworkUtils.GetPublicIPAddress();
-        return $"{publicIP}:{localPort}";
     }
 
     public void Update() => _netManager?.PollEvents();
@@ -213,6 +219,42 @@ public class Client {
             return;
         }
         _serverPeer!.Send(writer, method);
+    }
+
+    // -------------------------------------------------------------------------
+    // NAT Punch-through events
+    // -------------------------------------------------------------------------
+    private void OnNatIntroductionSuccess(IPEndPoint targetEndPoint, NatAddressType type, string token) {
+        ClientEvent?.Invoke(PeerEvent.NetworkInfo, null,
+            $"NAT introduction successful! Target: {targetEndPoint}, Type: {type}, Token: {token}");
+
+        // Attempt to connect to the target endpoint after successful NAT punch
+        try {
+            if (_netManager != null && !IsConnected && !IsConnecting) {
+                lock (_connectionLock) {
+                    IsConnecting = true;
+                }
+
+                _netManager.Connect(targetEndPoint, "");
+                ClientEvent?.Invoke(PeerEvent.NetworkInfo, null,
+                    $"Connecting to peer through NAT at {targetEndPoint}...");
+            }
+        } catch (Exception ex) {
+            lock (_connectionLock) {
+                IsConnecting = false;
+            }
+            ClientEvent?.Invoke(PeerEvent.NetworkError, null,
+                $"Failed to connect after NAT introduction: {ex.Message}");
+        }
+    }
+
+    private void OnNatIntroductionRequest(IPEndPoint localEndPoint, IPEndPoint remoteEndPoint, string token) {
+        ClientEvent?.Invoke(PeerEvent.NetworkInfo, null,
+            $"NAT introduction request received. Local: {localEndPoint}, Remote: {remoteEndPoint}, Token: {token}");
+
+        // This event is typically handled on a master/relay server
+        // For a client, you usually just log it or ignore it
+        // The actual NAT punch coordination happens on the server side
     }
 
     // -------------------------------------------------------------------------

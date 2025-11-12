@@ -118,7 +118,7 @@ public static class NetworkUtils {
         var parts = serverEndpoint.Split('|').Select(e => e.Trim()).ToArray();
 
         if (parts.Length != 3) {
-            return parts.Length > 1 ? $"{parts[1]}:{parts[0]}" : parts[0];
+            return "";
         }
 
         var port = parts[0];
