@@ -49,6 +49,12 @@ public class Client {
         }
 
         try {
+            if (_netManager == null) {
+                ClientEvent?.Invoke(PeerEvent.NetworkError, null, "NetManager not initialized");
+                lock (_connectionLock) { IsConnecting = false; }
+                return;
+            }
+
             PublicEndpoint = await DiscoverPublicEndpoint();
 
             string selectedEndpoint = await NetworkUtils.SelectBestEndpoint(serverCode);
@@ -61,14 +67,7 @@ public class Client {
                 return;
             }
 
-            var remoteEndPoint = new IPEndPoint(serverIP, serverPort);
-
-            if (_netManager == null) {
-                ClientEvent?.Invoke(PeerEvent.NetworkError, null, "NetManager not initialized");
-                lock (_connectionLock) { IsConnecting = false; }
-                return;
-            }
-
+            IPEndPoint remoteEndPoint = new(serverIP, serverPort);
             _connectionCts = new CancellationTokenSource();
             _netManager.Connect(remoteEndPoint, "");
 

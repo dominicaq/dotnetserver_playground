@@ -93,7 +93,6 @@ public class TestServer {
     }
 
     private static bool IsCriticalError(string errorMessage) {
-        // Define which errors should stop the server
         string[] criticalErrors = [
             "UPnP setup failed",
             "Failed to start",
